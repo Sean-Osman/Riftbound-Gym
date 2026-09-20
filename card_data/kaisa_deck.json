@@ -1,0 +1,347 @@
+[
+  {
+    "card_id": "OGN-004",
+    "short_name": "Cleave",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "R"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Give a unit [Assault 3] this turn. (+3 Might while it's an attacker.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/95d476a1e88ff547fb846149619177bc7e3cea9f-744x1039.png",
+    "energy": 1
+  },
+  {
+    "card_id": "OGN-027",
+    "short_name": "Darius",
+    "subtitle": "Trifarian",
+    "types": [
+      "unit"
+    ],
+    "supertypes": [
+      "champion"
+    ],
+    "tags": [
+      "Trifarian",
+      "Darius",
+      "Noxus"
+    ],
+    "champion_tag": "Darius",
+    "domains": [
+      "R"
+    ],
+    "rules_text": "When you play your second card in a turn, give me +2 Might this turn and ready me.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/bf7a4900fd2296972c1305a4707c23860bb0522e-744x1039.png",
+    "energy": 5,
+    "power": "1R",
+    "might": 5
+  },
+  {
+    "card_id": "OGN-247",
+    "short_name": "Daughter of the Void",
+    "types": [
+      "legend"
+    ],
+    "tags": [
+      "Kai'Sa"
+    ],
+    "champion_tag": "Kai'Sa",
+    "domains": [
+      "R",
+      "B"
+    ],
+    "rules_text": "[E]: [Reaction] — [Add] [A]. Use only to play spells. (Abilities that add resources can't be reacted to.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/3ea826277086945a2cdfda4e41b771075aa8b15b-744x1039.png"
+  },
+  {
+    "card_id": "OGN-029",
+    "short_name": "Falling Star",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "R"
+    ],
+    "rules_text": "Do this twice: Deal 3 to a unit. (You can choose different units.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/9cf2d2e59e1bf839cdf5c2a77e95f5d1e871788f-744x1039.png",
+    "energy": 2,
+    "power": "2R"
+  },
+  {
+    "card_id": "OGN-007",
+    "short_name": "Fury Rune",
+    "types": [
+      "rune"
+    ],
+    "domains": [
+      "R"
+    ],
+    "rules_text": "[E]: [Reaction] — Add [1]. Recycle this: [Reaction] — Add [C].",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/12bcd0cde5d9ff4640e82945001e9fef863530f1-744x1039.png"
+  },
+  {
+    "card_id": "OGN-009",
+    "short_name": "Hextech Ray",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "R"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Deal 3 to a unit at a battlefield.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/1e7d12693822c38377ddc8f15db23e2f9b6d560a-744x1039.png",
+    "energy": 1,
+    "power": "1R"
+  },
+  {
+    "card_id": "OGN-039",
+    "short_name": "Kai'Sa",
+    "subtitle": "Survivor",
+    "types": [
+      "unit"
+    ],
+    "supertypes": [
+      "champion"
+    ],
+    "tags": [
+      "Kai'Sa",
+      "The Void"
+    ],
+    "champion_tag": "Kai'Sa",
+    "domains": [
+      "R"
+    ],
+    "keywords": {
+      "Accelerate": null
+    },
+    "rules_text": "[Accelerate] (You may pay [1][R] as an additional cost to have me enter ready.) When I conquer, draw 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/3d942c02ad4e96a36dba14d663c5105bb6614500-744x1039.png",
+    "energy": 4,
+    "might": 4
+  },
+  {
+    "card_id": "OGN-089",
+    "short_name": "Mind Rune",
+    "types": [
+      "rune"
+    ],
+    "domains": [
+      "B"
+    ],
+    "rules_text": "[E]: [Reaction] — Add [1]. Recycle this: [Reaction] — Add [C].",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f99aa4874baaebd2e81798c8a3aa01c5900f6d30-744x1039.png"
+  },
+  {
+    "card_id": "OGN-012",
+    "short_name": "Noxus Hopeful",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Trifarian",
+      "Noxus"
+    ],
+    "domains": [
+      "R"
+    ],
+    "keywords": {
+      "Legion": null
+    },
+    "rules_text": "[Legion] — I cost [2] less. (Get the effect if you've played another card this turn.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/c3bb6f4cb58feeb50e396d12ec9865c5434025af-744x1039.png",
+    "energy": 4,
+    "might": 4
+  },
+  {
+    "card_id": "OGN-013",
+    "short_name": "Pouty Poro",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Poro"
+    ],
+    "domains": [
+      "R"
+    ],
+    "keywords": {
+      "Deflect": null
+    },
+    "rules_text": "[Deflect] (Opponents must pay [A] to choose me with a spell or ability.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d541bf3bcb5aa3ad0d48d87f5753569b72ac426f-744x1039.png",
+    "energy": 2,
+    "might": 2
+  },
+  {
+    "card_id": "OGN-103",
+    "short_name": "Ravenbloom Student",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Noxus"
+    ],
+    "domains": [
+      "B"
+    ],
+    "rules_text": "When you play a spell, give me +1 Might this turn.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b98b1ff793b6eb263957258742cc83d50fda6537-744x1039.png",
+    "energy": 2,
+    "might": 2
+  },
+  {
+    "card_id": "OGN-285",
+    "short_name": "Reaver's Row",
+    "types": [
+      "battlefield"
+    ],
+    "rules_text": "When you defend here, you may move a friendly unit here to base.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/364af10bac81e6ffb8658b0dc0db551608d207ce-1038x744.png"
+  },
+  {
+    "card_id": "OGN-104",
+    "short_name": "Retreat",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "B"
+    ],
+    "keywords": {
+      "Reaction": null
+    },
+    "rules_text": "[Reaction] (Play any time, even before spells and abilities resolve.) Return a friendly unit to its owner's hand. Its owner channels 1 rune exhausted.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/71ecf6c06d3110a81ac0f01c726c06921f479a13-744x1039.png",
+    "energy": 1
+  },
+  {
+    "card_id": "OGN-093",
+    "short_name": "Smoke Screen",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "B"
+    ],
+    "keywords": {
+      "Reaction": null
+    },
+    "rules_text": "[Reaction] (Play any time, even before spells and abilities resolve.) Give a unit -4 Might this turn, to a minimum of 1 Might.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/06c34457afd09b828ee0b2862ed51eb31004d888-744x1039.png",
+    "energy": 2,
+    "power": "1B"
+  },
+  {
+    "card_id": "OGN-288",
+    "short_name": "Startipped Peak",
+    "types": [
+      "battlefield"
+    ],
+    "rules_text": "When you hold here, you may channel 1 rune exhausted.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/05adde1d8ab40e2a2f832a89ac5c9174ee78796f-1038x744.png"
+  },
+  {
+    "card_id": "OGN-095",
+    "short_name": "Stupefy",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "B"
+    ],
+    "keywords": {
+      "Reaction": null
+    },
+    "rules_text": "[Reaction] (Play any time, even before spells and abilities resolve.) Give a unit -1 Might this turn, to a minimum of 1 Might. Draw 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/837a5976192bbf8bdb4086429802167548ecc119-744x1039.png",
+    "energy": 1
+  },
+  {
+    "card_id": "OGN-290",
+    "short_name": "The Arena's Greatest",
+    "types": [
+      "battlefield"
+    ],
+    "rules_text": "At the start of each player's first Beginning Phase, that player gains 1 point.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/2afd8bdfdd42b1595af0746a6c6b92879ac770d6-1038x744.png"
+  },
+  {
+    "card_id": "OGN-116",
+    "short_name": "Thousand-Tailed Watcher",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Ionia"
+    ],
+    "domains": [
+      "B"
+    ],
+    "keywords": {
+      "Accelerate": null
+    },
+    "rules_text": "[Accelerate] (You may pay [1][B] as an additional cost to have me enter ready.) When you play me, give enemy units -3 Might this turn, to a minimum of 1 Might.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b20e5644c33924a58e0497dd9f7db19723147003-744x1039.png",
+    "energy": 7,
+    "power": "1B",
+    "might": 7
+  },
+  {
+    "card_id": "OGN-122",
+    "short_name": "Time Warp",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "B"
+    ],
+    "rules_text": "Take a turn after this one. Banish this.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b97bbcf3cf6cb6e5f4baaa1bfbb85dc860eb950b-744x1039.png",
+    "energy": 10,
+    "power": "4B"
+  },
+  {
+    "card_id": "OGN-024",
+    "short_name": "Void Seeker",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "R"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Deal 4 to a unit at a battlefield. Draw 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5b64b63c6be58ff3c33c7fb3c2dcb168d64e287e-744x1039.png",
+    "energy": 3,
+    "power": "1R"
+  },
+  {
+    "card_id": "OGN-096",
+    "short_name": "Watchful Sentry",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Freljord"
+    ],
+    "domains": [
+      "B"
+    ],
+    "keywords": {
+      "Deathknell": null
+    },
+    "rules_text": "[Deathknell] — Draw 1. (When I die, get the effect.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d84da2c62b1e218a0a74b227c49ce8a953918ebd-744x1039.png",
+    "energy": 2,
+    "might": 1
+  }
+]

@@ -1,0 +1,37 @@
+{
+  "metadata": {
+    "name": "Best Origins Kai'sa",
+    "author": "Den"
+  },
+  "deck": {
+    "Main Board": [
+      { "id": "OGN-093", "count": 3 },
+      { "id": "OGN-290", "count": 1 },
+      { "id": "OGN-288", "count": 1 },
+      { "id": "OGN-285", "count": 1 },
+      { "id": "OGN-247", "count": 1 },
+      { "id": "OGN-122", "count": 1 },
+      { "id": "OGN-116", "count": 3 },
+      { "id": "OGN-104", "count": 2 },
+      { "id": "OGN-103", "count": 3 },
+      { "id": "OGN-096", "count": 3 },
+      { "id": "OGN-095", "count": 3 },
+      { "id": "OGN-004", "count": 3 },
+      { "id": "OGN-089", "count": 6 },
+      { "id": "OGN-039", "count": 1 },
+      { "id": "OGN-029", "count": 3 },
+      { "id": "OGN-027", "count": 3 },
+      { "id": "OGN-024", "count": 3 },
+      { "id": "OGN-013", "count": 3 },
+      { "id": "OGN-012", "count": 3 },
+      { "id": "OGN-009", "count": 3 },
+      { "id": "OGN-007", "count": 6 }
+    ],
+    "Side Board": [
+      { "id": "OGN-087", "count": 3 },
+      { "id": "OGN-022", "count": 3 },
+      { "id": "OGN-122", "count": 1 },
+      { "id": "OGN-248", "count": 1 }
+    ]
+  }
+}

@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Riftbound Sim</title>
+<style>
+  :root {
+    --bg: #f4f2ee; --surface: #ffffff; --surface-2: #ebe8e2; --line: #d6d1c8;
+    --text: #1f1d1a; --muted: #6d675e; --accent: #b3471d; --accent-text: #fff;
+    --you: #2f6f8f; --opp: #9a3b3b; --zone: rgba(0,0,0,.035);
+    --shadow: 0 1px 2px rgba(0,0,0,.08), 0 4px 12px rgba(0,0,0,.06);
+    --card-w: 84px; --card-h: 117px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --surface: #202227; --surface-2: #2a2d33; --line: #383c44;
+      --text: #ecebe8; --muted: #9a9790; --accent: #e0703f; --accent-text: #16171a;
+      --you: #6fb3d6; --opp: #e07c7c; --zone: rgba(255,255,255,.03);
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.3);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 20px;
+           border-bottom: 1px solid var(--line); background: var(--surface); }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+  header .status { color: var(--muted); }
+  header .spacer { flex: 1; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+           padding: 7px 14px; border-radius: 8px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 16px 20px; }
+  .board { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+  .player { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+            padding: 12px; box-shadow: var(--shadow); border-top: 3px solid var(--seat-color); }
+  .player.you { --seat-color: var(--you); }
+  .player.opp { --seat-color: var(--opp); }
+  .player-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+  .player-head .name { font-weight: 650; color: var(--seat-color); }
+  .player-head .turn-flag { font-size: 12px; padding: 2px 8px; border-radius: 999px;
+                            background: var(--seat-color); color: var(--surface); }
+  .score { display: flex; gap: 3px; margin-left: auto; align-items: center; }
+  .score .pip { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--seat-color); }
+  .score .pip.on { background: var(--seat-color); }
+  .score .num { margin-left: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .row { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; }
+  .zone { background: var(--zone); border: 1px dashed var(--line); border-radius: 10px; padding: 6px;
+          display: flex; flex-direction: column; gap: 4px; min-width: calc(var(--card-w) + 14px); }
+  .zone.grow { flex: 1; min-width: 160px; }
+  .zone-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .cards { display: flex; gap: 6px; flex-wrap: wrap; min-height: var(--card-h); align-items: flex-start; }
+  .empty { color: var(--muted); font-size: 12px; align-self: center; margin: auto; }
+  .piles { display: grid; grid-template-columns: repeat(2, auto); gap: 6px; align-content: start; }
+  .pile { background: var(--surface-2); border-radius: 8px; padding: 6px 10px; text-align: center; min-width: 70px; }
+  .pile b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .pile span { font-size: 11px; color: var(--muted); }
+
+  .card { width: var(--card-w); height: var(--card-h); border-radius: 7px; overflow: hidden; position: relative;
+          background: var(--surface-2); border: 1px solid var(--line); cursor: pointer; flex: none;
+          transition: transform .12s ease, box-shadow .12s ease; padding: 0; }
+  .card:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+  .card img { width: 100%; height: 100%; object-fit: cover; display: block; position: relative; z-index: 1; }
+  .card .fallback { position: absolute; inset: 0; padding: 6px; font-size: 11px; display: flex;
+                    flex-direction: column; justify-content: space-between; text-align: left; }
+  .card.exhausted { transform: rotate(8deg); opacity: .8; }
+  .card.back { cursor: default; background:
+      repeating-linear-gradient(45deg, var(--seat-color) 0 6px, transparent 6px 12px), var(--surface-2);
+      opacity: .45; }
+  .card.back:hover { transform: none; box-shadow: none; }
+  .hand .cards { min-height: 0; }
+  .opp .hand .card { --card-w: 48px; --card-h: 67px; }
+
+  .battlefields { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .bf { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+        box-shadow: var(--shadow); display: flex; flex-direction: column; }
+  .bf-art { position: relative; height: 120px; cursor: pointer; background: var(--surface-2); }
+  .bf-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .bf-art .cap { position: absolute; left: 0; right: 0; top: 0; padding: 6px 10px 18px; color: #fff;
+                 background: linear-gradient(rgba(0,0,0,.75), transparent); font-weight: 600; }
+  .bf-art .ctrl { font-weight: 400; font-size: 12px; opacity: .85; }
+  .bf .cards { padding: 8px; }
+
+  aside { display: flex; flex-direction: column; gap: 12px; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+           box-shadow: var(--shadow); }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .detail img { width: 100%; border-radius: 10px; display: block; margin-bottom: 8px; }
+  .detail .title { font-weight: 650; font-size: 15px; }
+  .detail .meta { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
+  .detail .text { white-space: pre-wrap; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .actions .waiting { color: var(--muted); }
+  .log { max-height: 280px; overflow: auto; font-size: 12px; margin: 0; padding-left: 18px; color: var(--muted); }
+  .log li:last-child { color: var(--text); }
+
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none;
+             align-items: center; justify-content: center; }
+  .overlay.show { display: flex; }
+  .overlay .box { background: var(--surface); border-radius: 14px; padding: 28px 36px; text-align: center;
+                  box-shadow: var(--shadow); }
+  .overlay h2 { margin: 0 0 6px; font-size: 22px; }
+  .overlay p { color: var(--muted); margin: 0 0 18px; }
+  .error { color: var(--opp); }
+
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; padding: 12px 16px; }
+    header { padding: 10px 16px; flex-wrap: wrap; }
+    :root { --card-w: 64px; --card-h: 89px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Riftbound Sim</h1>
+  <span class="status" id="status">Loading…</span>
+  <span class="spacer"></span>
+  <button id="new-game">New game</button>
+</header>
+
+<main>
+  <section class="board">
+    <div id="opp"></div>
+    <div class="battlefields" id="battlefields"></div>
+    <div id="you"></div>
+  </section>
+  <aside>
+    <div class="panel">
+      <h2>Your move</h2>
+      <div class="actions" id="actions"></div>
+    </div>
+    <div class="panel detail" id="detail">
+      <h2>Card</h2>
+      <div class="meta">Click any card to inspect it.</div>
+    </div>
+    <div class="panel">
+      <h2>Log</h2>
+      <ol class="log" id="log"></ol>
+    </div>
+  </aside>
+</main>
+
+<div class="overlay" id="overlay">
+  <div class="box">
+    <h2 id="winner-text"></h2>
+    <p id="winner-sub">Winner picked at random (no rules yet).</p>
+    <button class="primary" id="again">Play again</button>
+  </div>
+</div>
+
+<script>
+let state = null;
+const cardsByOid = new Map();
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} :
+    { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function cardHtml(c) {
+  if (!c || c.hidden) return `<div class="card back" title="Hidden"></div>`;
+  cardsByOid.set(c.oid, c);
+  const cls = "card" + (c.exhausted ? " exhausted" : "");
+  const fallback = `<div class="fallback"><b>${esc(c.name)}</b><span>${esc(c.cost ?? "")} ${c.might != null ? c.might + " M" : ""}</span></div>`;
+  const img = c.art_url ? `<img src="${esc(c.art_url)}" alt="${esc(c.name)}" loading="lazy" onerror="this.remove()">` : "";
+  return `<button class="${cls}" data-oid="${c.oid}" title="${esc(c.name)}">${fallback}${img}</button>`;
+}
+
+function zoneHtml(label, zone, extraClass = "") {
+  const objs = zone.objects;
+  const inner = objs.length ? objs.map(cardHtml).join("") : `<span class="empty">empty</span>`;
+  return `<div class="zone ${extraClass}"><span class="zone-label">${label}</span><div class="cards">${inner}</div></div>`;
+}
+
+function scoreHtml(points, target) {
+  let pips = "";
+  for (let i = 0; i < target; i++) pips += `<span class="pip ${i < points ? "on" : ""}"></span>`;
+  return `<div class="score" title="${points} / ${target} points">${pips}<span class="num">${points}/${target}</span></div>`;
+}
+
+function playerHtml(p, obs, isYou) {
+  const z = p.zones;
+  const turnFlag = obs.turn_player === p.seat && obs.phase !== "game_over" ? `<span class="turn-flag">Turn</span>` : "";
+  const pile = (label, zone) => `<div class="pile"><b>${zone.count}</b><span>${label}</span></div>`;
+  const hand = `<div class="zone grow hand"><span class="zone-label">Hand (${z.hand.count})</span><div class="cards">${
+    z.hand.objects.length ? z.hand.objects.map(cardHtml).join("") : `<span class="empty">empty</span>`}</div></div>`;
+  const main = `
+    <div class="row">
+      ${zoneHtml("Legend", z.legend)}
+      ${zoneHtml("Champion", z.champion)}
+      ${zoneHtml("Base", z.base, "grow")}
+      <div class="piles">
+        ${pile("Main deck", z.main_deck)}${pile("Rune deck", z.rune_deck)}
+        ${pile("Trash", z.trash)}${pile("Banished", z.banishment)}
+      </div>
+    </div>`;
+  return `<div class="player ${isYou ? "you" : "opp"}">
+      <div class="player-head"><span class="name">${esc(p.name)}</span>${turnFlag}${scoreHtml(p.points, obs.victory_score)}</div>
+      ${isYou ? main + `<div class="row" style="margin-top:10px">${hand}</div>`
+              : `<div class="row" style="margin-bottom:10px">${hand}</div>` + main}
+    </div>`;
+}
+
+function battlefieldHtml(bf, obs) {
+  cardsByOid.set(bf.card.oid, bf.card);
+  const ctrl = (bf.controller == null ? "Uncontrolled" : `Controlled by ${esc(obs.players[bf.controller].name)}`)
+    + ` · brought by ${esc(obs.players[bf.card.owner].name)}`;
+  const img = bf.card.art_url ? `<img src="${esc(bf.card.art_url)}" alt="" loading="lazy" onerror="this.remove()">` : "";
+  const units = bf.units.length ? bf.units.map(cardHtml).join("") : `<span class="empty">No units</span>`;
+  return `<div class="bf">
+      <div class="bf-art" data-oid="${bf.card.oid}" title="${esc(bf.card.name)}">${img}
+        <div class="cap">${esc(bf.card.name)}<div class="ctrl">${ctrl}</div></div></div>
+      <div class="cards">${units}</div>
+    </div>`;
+}
+
+function showDetail(c) {
+  const meta = [c.types.join(" / "), c.domains.join(""), c.cost, c.might != null ? `${c.might} Might` : null]
+    .filter(Boolean).join(" · ");
+  const kws = Object.entries(c.keywords).map(([k, v]) => v == null ? k : `${k} ${v}`).join(", ");
+  $("detail").innerHTML = `<h2>Card</h2>
+    ${c.art_url ? `<img src="${esc(c.art_url)}" alt="${esc(c.name)}">` : ""}
+    <div class="title">${esc(c.name)}</div>
+    <div class="meta">${esc(meta)}${kws ? "<br>Keywords: " + esc(kws) : ""}</div>
+    <div class="text">${esc(c.rules_text || "No rules text.")}</div>`;
+}
+
+function render() {
+  const obs = state.observation;
+  cardsByOid.clear();
+  const you = obs.players[state.human_seat];
+  const opp = obs.players[1 - state.human_seat];
+  $("opp").innerHTML = playerHtml(opp, obs, false);
+  $("you").innerHTML = playerHtml(you, obs, true);
+  $("battlefields").innerHTML = obs.battlefields.map((bf) => battlefieldHtml(bf, obs)).join("");
+
+  const over = obs.phase === "game_over";
+  $("status").textContent = over
+    ? `Game over · ${obs.players[obs.winner].name} won`
+    : `Turn ${obs.turn} · ${obs.players[obs.turn_player].name} to act · seed ${state.seed}`;
+
+  $("actions").innerHTML = state.legal_actions.length
+    ? state.legal_actions.map((a, i) =>
+        `<button class="${a.kind === "pass" ? "primary" : ""}" data-action="${i}">${esc(a.label)}</button>`).join("")
+    : `<span class="waiting">${over ? "Game over." : "Waiting for the agent…"}</span>`;
+
+  $("log").innerHTML = state.log.map((l) => `<li>${esc(l)}</li>`).join("");
+  $("log").scrollTop = $("log").scrollHeight;
+
+  $("overlay").classList.toggle("show", over);
+  if (over) $("winner-text").textContent = obs.winner === state.human_seat ? "You win" : `${obs.players[obs.winner].name} wins`;
+}
+
+async function run(fn) {
+  try { state = await fn(); render(); }
+  catch (e) { $("actions").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+}
+
+document.addEventListener("click", (e) => {
+  const act = e.target.closest("[data-action]");
+  if (act) return run(() => api("/api/action", { index: Number(act.dataset.action) }));
+  const card = e.target.closest("[data-oid]");
+  if (card && cardsByOid.has(Number(card.dataset.oid))) showDetail(cardsByOid.get(Number(card.dataset.oid)));
+});
+$("new-game").onclick = $("again").onclick = () => run(() => api("/api/new", {}));
+run(() => api("/api/state"));
+</script>
+</body>
+</html>

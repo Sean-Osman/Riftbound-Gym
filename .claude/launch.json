@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "riftbound-sim",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["sim.py", "--port", "8765"],
+      "port": 8765
+    }
+  ]
+}
