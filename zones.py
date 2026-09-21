@@ -182,6 +182,7 @@ class RunePool:
     """165: available Energy and Power. Not a zone and not a game object."""
     energy: int = 0
     power: dict[str, int] = field(default_factory=dict)    # domain letter or "A" -> amount
+    runes: list[CardInstance] = field(default_factory=list)
 
     def empty(self) -> None:
         self.energy = 0
