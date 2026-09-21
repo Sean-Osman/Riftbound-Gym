@@ -43,6 +43,7 @@
   .player.opp { --seat-color: var(--opp); }
   .player-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
   .player-head .name { font-weight: 650; color: var(--seat-color); }
+  .resources { color: var(--muted); font-size: 12px; }
   .player-head .turn-flag { font-size: 12px; padding: 2px 8px; border-radius: 999px;
                             background: var(--seat-color); color: var(--surface); }
   .score { display: flex; gap: 3px; margin-left: auto; align-items: center; }
@@ -193,6 +194,8 @@ function scoreHtml(points, target) {
 function playerHtml(p, obs, isYou) {
   const z = p.zones;
   const turnFlag = obs.turn_player === p.seat && obs.phase !== "game_over" ? `<span class="turn-flag">Turn</span>` : "";
+  const power = Object.entries(p.rune_pool.power).map(([domain, count]) => `${domain}:${count}`).join(" ") || "none";
+  const resources = `<span class="resources">Energy ${p.rune_pool.energy} · Power ${esc(power)}</span>`;
   const pile = (label, zone) => `<div class="pile"><b>${zone.count}</b><span>${label}</span></div>`;
   const hand = `<div class="zone grow hand"><span class="zone-label">Hand (${z.hand.count})</span><div class="cards">${
     z.hand.objects.length ? z.hand.objects.map(cardHtml).join("") : `<span class="empty">empty</span>`}</div></div>`;
@@ -201,13 +204,14 @@ function playerHtml(p, obs, isYou) {
       ${zoneHtml("Legend", z.legend)}
       ${zoneHtml("Champion", z.champion)}
       ${zoneHtml("Base", z.base, "grow")}
+      ${zoneHtml("Channeled runes", {objects: p.rune_pool.runes || []})}
       <div class="piles">
         ${pile("Main deck", z.main_deck)}${pile("Rune deck", z.rune_deck)}
         ${pile("Trash", z.trash)}${pile("Banished", z.banishment)}
       </div>
     </div>`;
   return `<div class="player ${isYou ? "you" : "opp"}">
-      <div class="player-head"><span class="name">${esc(p.name)}</span>${turnFlag}${scoreHtml(p.points, obs.victory_score)}</div>
+      <div class="player-head"><span class="name">${esc(p.name)}</span>${turnFlag}${resources}${scoreHtml(p.points, obs.victory_score)}</div>
       ${isYou ? main + `<div class="row" style="margin-top:10px">${hand}</div>`
               : `<div class="row" style="margin-bottom:10px">${hand}</div>` + main}
     </div>`;

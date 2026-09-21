@@ -27,9 +27,159 @@ def test_setup_puts_cards_in_starting_zones():
     assert not g.chain.objects
 
 
+def test_passing_begins_next_turn_with_a_draw():
+    g = new_game()
+    seat = g.acting_player
+    opponent = 1 - seat
+    before = len(g.players[opponent].hand)
+    rune_before = len(g.players[opponent].rune_deck)
+    g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.PASS))
+    assert g.turn == 2
+    assert g.turn_player == opponent
+    assert g.observation(seat)["turn_phase"] == "action"
+    assert len(g.players[opponent].hand) == before + 1
+    assert len(g.players[opponent].rune_deck) == rune_before - 2
+    assert g.players[opponent].rune_pool.energy == 2
+    assert sum(g.players[opponent].rune_pool.power.values()) == 2
+
+
+def test_channeling_adds_power_for_the_top_runes_domain():
+    g = new_game()
+    seat = g.acting_player
+    expected_domains = {domain.value for domain in g.players[seat].rune_deck.objects[-1].card.domains}
+
+    g._channel_rune(seat)
+
+    assert g.players[seat].rune_pool.power == {domain: 1 for domain in expected_domains}
+
+
+def test_channeling_empty_rune_deck_is_a_noop():
+    g = new_game()
+    seat = g.acting_player
+    zones = g.players[seat]
+    zones.rune_deck.objects.clear()
+
+    g._channel_rune(seat)
+
+    assert not zones.rune_pool.power
+
+
+def test_observation_shows_my_channeled_rune_and_hides_opponents():
+    g = new_game()
+    seat = g.acting_player
+    opponent = 1 - seat
+    g._channel_rune(seat)
+
+    mine = g.observation(seat)["players"][seat]["rune_pool"]["runes"]
+    theirs = g.observation(opponent)["players"][seat]["rune_pool"]["runes"]
+
+    assert len(mine) == 1 and "name" in mine[0]
+    assert theirs == [{"hidden": True}]
+
+
+def test_starting_turn_readies_runes_and_restores_power():
+    g = new_game()
+    seat = g.acting_player
+    g._channel_rune(seat)
+    rune = g.players[seat].rune_pool.runes[0]
+    rune.exhausted = True
+    g.players[seat].rune_pool.power.clear()
+
+    g._ready_runes(seat)
+
+    assert not rune.exhausted
+    assert sum(g.players[seat].rune_pool.power.values()) == len(rune.card.domains)
+
+
+def test_play_card_spends_energy_and_moves_permanent_to_base():
+    g = new_game()
+    seat = g.acting_player
+    zones = g.players[seat]
+    zones.rune_pool.energy = 10
+    g._channel_rune(seat)
+    g._channel_rune(seat)
+    card = next(obj for obj in zones.hand if obj.card.is_permanent and not obj.card.cost.power)
+    action = next(a for a in g.legal_actions() if a.card_oid == card.oid)
+
+    g.step(action)
+
+    assert card.zone is zones.base
+    assert card not in zones.hand
+    assert zones.rune_pool.energy == 10 - card.card.cost.energy
+
+
+def test_play_card_rejects_insufficient_energy_without_moving_card():
+    g = new_game()
+    seat = g.acting_player
+    zones = g.players[seat]
+    card = next(obj for obj in zones.hand if obj.card.is_permanent and not obj.card.cost.power)
+    zones.rune_pool.energy = 10
+    g._channel_rune(seat)
+    g._channel_rune(seat)
+    action = next(a for a in g.legal_actions(seat) if a.card_oid == card.oid)
+    zones.rune_pool.energy = max(0, card.card.cost.energy - 1)
+    energy_before = zones.rune_pool.energy
+
+    try:
+        g._play_card(seat, action)
+    except ValueError as error:
+        assert "not enough Energy" in str(error)
+    else:
+        raise AssertionError("expected insufficient Energy to be rejected")
+
+    assert card.zone is zones.hand
+    assert zones.rune_pool.energy == energy_before
+
+
+def test_play_card_can_pay_power_cost_for_a_unit():
+    g = new_game()
+    seat = g.acting_player
+    zones = g.players[seat]
+    card = next(obj for obj in zones.hand if obj.card.is_unit and obj.card.cost.power)
+    zones.rune_pool.energy = card.card.cost.energy
+    while (not g._can_pay_power(card.card, zones.rune_pool.power)
+           or not g._can_pay_costs(card.card, zones)):
+        g._channel_rune(seat)
+    action = next(a for a in g.legal_actions(seat) if a.card_oid == card.oid)
+    runes_before = len(zones.rune_pool.runes)
+
+    g.step(action)
+
+    assert card.zone is zones.base
+    assert len(zones.rune_pool.runes) == runes_before - len(card.card.cost.power)
+
+
+def test_darius_spends_five_energy_and_exhausts_red_rune():
+    g = new_game()
+    seat = g.acting_player
+    zones = g.players[seat]
+    card = next(obj for obj in [*zones.hand, *zones.main_deck] if obj.card.short_name == "Darius")
+    if card.zone is not zones.hand:
+        g.move(card, zones.hand)
+    red_rune = next(rune for rune in zones.rune_deck if any(domain.value == "R" for domain in rune.card.domains))
+    runes = [red_rune, *(rune for rune in zones.rune_deck if rune is not red_rune)][:5]
+    for rune in runes:
+        zones.rune_deck.objects.remove(rune)
+        rune.zone = None
+        zones.rune_pool.runes.append(rune)
+        for domain in rune.card.domains:
+            zones.rune_pool.power[domain.value] = zones.rune_pool.power.get(domain.value, 0) + 1
+    zones.rune_pool.energy = 10
+    action = next(a for a in g.legal_actions(seat) if a.card_oid == card.oid)
+
+    g.step(action)
+
+    assert card.zone is zones.base
+    assert zones.rune_pool.energy == 5
+    assert red_rune.zone is zones.rune_deck
+    assert red_rune in zones.rune_deck.objects
+    assert sum(rune.exhausted for rune in zones.rune_pool.runes) == 4
+
+
 def test_observation_hides_private_and_secret_info():
     g = new_game()
     obs = g.observation(0)
+    assert obs["turn_phase"] == "action"
     me, opp = obs["players"]
     assert all("name" in c for c in me["zones"]["hand"]["objects"])
     assert all(c == {"hidden": True} for c in opp["zones"]["hand"]["objects"])
