@@ -96,6 +96,27 @@ def test_demo_deck_is_legal():
     assert deck.errors() == []
 
 
+def test_decklists_keep_runes_in_a_separate_rune_deck(tmp_path):
+    import json
+    from cards import load_card_pool
+    from game import ROOT
+    pool = load_card_pool(ROOT / "card_data")
+    deck, _ = load_demo_decks()
+    assert len(deck.runes) == 12 and all(c.is_rune for c in deck.runes)
+    assert not any(c.is_rune for c in deck.main)
+
+    spec = json.loads((ROOT / "decks" / "kaisa.json").read_text())
+    spec["deck"]["Main Board"] += spec["deck"].pop("Rune Deck")
+    path = tmp_path / "old_style.json"
+    path.write_text(json.dumps(spec))
+    try:
+        Deck.load(path, pool)
+    except ValueError as error:
+        assert "Rune Deck" in str(error)
+    else:
+        raise AssertionError("runes in the Main Board should be rejected")
+
+
 def test_setup_puts_cards_in_starting_zones():
     g = new_game()
     for seat, zones in enumerate(g.players):

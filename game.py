@@ -77,17 +77,29 @@ class Deck:
         """Load an exported decklist:
 
             {"metadata": {"name", "author"},
-             "deck": {"Main Board": [{"id": "OGN-039", "count": 1}, ...], "Side Board": [...]}}
+             "deck": {"Main Board": [{"id": "OGN-039", "count": 1}, ...],
+                      "Rune Deck": [{"id": "OGN-007", "count": 6}, ...],
+                      "Side Board": [...]}}
 
-        Main Board is one flat list, so entries are sorted by card type (103):
-        the legend, the battlefields, the runes, and the main deck. One copy of
-        the champion unit whose champion tag matches the legend is set aside as
-        the Chosen Champion (103.2.a); any further copies stay in the main deck.
-        The Side Board is ignored - sideboarding isn't a Core Rules deck zone.
+        The Rune Deck (103.3) holds the runes and nothing else. Main Board holds
+        everything else and is sorted by card type (103): the legend, the
+        battlefields, and the main deck. One copy of the champion unit whose
+        champion tag matches the legend is set aside as the Chosen Champion
+        (103.2.a); any further copies stay in the main deck. The Side Board is
+        ignored - sideboarding isn't a Core Rules deck zone.
         """
         spec = json.loads(Path(path).read_text(encoding="utf-8"))
-        board = spec["deck"]["Main Board"] if "deck" in spec else spec["Main Board"]
-        cards: list[CardDef] = [pool[e["id"]] for e in board for _ in range(e.get("count", 1))]
+        sections = spec["deck"] if "deck" in spec else spec
+
+        def expand(name: str) -> list[CardDef]:
+            return [pool[e["id"]] for e in sections.get(name, []) for _ in range(e.get("count", 1))]
+
+        cards = expand("Main Board")
+        runes = expand("Rune Deck")
+        if misplaced := sorted({c.name for c in cards if c.is_rune}):
+            raise ValueError(f"runes belong in the Rune Deck, not the Main Board: {misplaced}")
+        if misplaced := sorted({c.name for c in runes if not c.is_rune}):
+            raise ValueError(f"the Rune Deck can only hold runes: {misplaced}")
 
         legends = [c for c in cards if c.is_legend]
         if len(legends) != 1:
@@ -98,14 +110,12 @@ class Deck:
             raise ValueError(f"decklist has no champion unit with the tag {legend.champion_tag!r}")
         champion = champions[0]
 
-        main, runes, battlefields = [], [], []
+        main, battlefields = [], []
         champion_taken = False
         for card in cards:
             if card is legend:
                 continue
-            if card.is_rune:
-                runes.append(card)
-            elif card.is_battlefield:
+            if card.is_battlefield:
                 battlefields.append(card)
             elif card is champion and not champion_taken:
                 champion_taken = True          # the Chosen Champion, not a main deck slot

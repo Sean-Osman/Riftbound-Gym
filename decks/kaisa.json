@@ -17,14 +17,16 @@
       { "id": "OGN-096", "count": 3 },
       { "id": "OGN-095", "count": 3 },
       { "id": "OGN-004", "count": 3 },
-      { "id": "OGN-089", "count": 6 },
       { "id": "OGN-039", "count": 1 },
       { "id": "OGN-029", "count": 3 },
       { "id": "OGN-027", "count": 3 },
       { "id": "OGN-024", "count": 3 },
       { "id": "OGN-013", "count": 3 },
       { "id": "OGN-012", "count": 3 },
-      { "id": "OGN-009", "count": 3 },
+      { "id": "OGN-009", "count": 3 }
+    ],
+    "Rune Deck": [
+      { "id": "OGN-089", "count": 6 },
       { "id": "OGN-007", "count": 6 }
     ],
     "Side Board": [
