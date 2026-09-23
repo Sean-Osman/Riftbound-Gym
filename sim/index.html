@@ -129,6 +129,7 @@
   <section class="board">
     <div id="opp"></div>
     <div class="battlefields" id="battlefields"></div>
+    <div id="chain"></div>
     <div id="you"></div>
   </section>
   <aside>
@@ -150,7 +151,7 @@
 <div class="overlay" id="overlay">
   <div class="box">
     <h2 id="winner-text"></h2>
-    <p id="winner-sub">Winner picked at random (no rules yet).</p>
+    <p id="winner-sub"></p>
     <button class="primary" id="again">Play again</button>
   </div>
 </div>
@@ -185,6 +186,8 @@ function zoneHtml(label, zone, extraClass = "") {
   return `<div class="zone ${extraClass}"><span class="zone-label">${label}</span><div class="cards">${inner}</div></div>`;
 }
 
+const isRune = (c) => !c.hidden && c.types.includes("rune");
+
 function scoreHtml(points, target) {
   let pips = "";
   for (let i = 0; i < target; i++) pips += `<span class="pip ${i < points ? "on" : ""}"></span>`;
@@ -203,8 +206,8 @@ function playerHtml(p, obs, isYou) {
     <div class="row">
       ${zoneHtml("Legend", z.legend)}
       ${zoneHtml("Champion", z.champion)}
-      ${zoneHtml("Base", z.base, "grow")}
-      ${zoneHtml("Channeled runes", {objects: p.rune_pool.runes || []})}
+      ${zoneHtml("Base", {objects: z.base.objects.filter((c) => !isRune(c))}, "grow")}
+      ${zoneHtml("Runes", {objects: z.base.objects.filter(isRune)})}
       <div class="piles">
         ${pile("Main deck", z.main_deck)}${pile("Rune deck", z.rune_deck)}
         ${pile("Trash", z.trash)}${pile("Banished", z.banishment)}
@@ -249,22 +252,28 @@ function render() {
   $("opp").innerHTML = playerHtml(opp, obs, false);
   $("you").innerHTML = playerHtml(you, obs, true);
   $("battlefields").innerHTML = obs.battlefields.map((bf) => battlefieldHtml(bf, obs)).join("");
+  $("chain").innerHTML = obs.chain.length ? zoneHtml("Chain (newest last)", {objects: obs.chain}) : "";
 
   const over = obs.phase === "game_over";
   $("status").textContent = over
     ? `Game over · ${obs.players[obs.winner].name} won`
-    : `Turn ${obs.turn} · ${obs.players[obs.turn_player].name} to act · seed ${state.seed}`;
+    : obs.turn_phase === "mulligan"
+      ? `Mulligan · ${obs.players[obs.acting_player].name} to choose · seed ${state.seed}`
+      : `Turn ${obs.turn} · ${obs.turn_phase} phase · ${obs.players[obs.acting_player].name} to act · seed ${state.seed}`;
 
   $("actions").innerHTML = state.legal_actions.length
     ? state.legal_actions.map((a, i) =>
-        `<button class="${a.kind === "pass" ? "primary" : ""}" data-action="${i}">${esc(a.label)}</button>`).join("")
+        `<button class="${a.kind === "pass" || a.kind === "end_turn" ? "primary" : ""}" data-action="${i}">${esc(a.label)}</button>`).join("")
     : `<span class="waiting">${over ? "Game over." : "Waiting for the agent…"}</span>`;
 
   $("log").innerHTML = state.log.map((l) => `<li>${esc(l)}</li>`).join("");
   $("log").scrollTop = $("log").scrollHeight;
 
   $("overlay").classList.toggle("show", over);
-  if (over) $("winner-text").textContent = obs.winner === state.human_seat ? "You win" : `${obs.players[obs.winner].name} wins`;
+  if (over) {
+    $("winner-text").textContent = obs.winner === state.human_seat ? "You win" : `${obs.players[obs.winner].name} wins`;
+    $("winner-sub").textContent = obs.players.map((p) => `${p.name}: ${p.points}`).join(" · ");
+  }
 }
 
 async function run(fn) {

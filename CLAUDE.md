@@ -3,7 +3,7 @@
 A rules-accurate simulator for the Riftbound TCG, built as an RL environment. The end goal is to
 train PPO agents to pilot meta decks, measure matchup win rates between decks, and serve the agents
 as practice opponents in the browser sim. See README.md for the roadmap. The rules engine is still
-incomplete: games end with a placeholder random winner after `placeholder_turns` turns.
+incomplete: there is no movement, combat or card abilities yet, so games are decided by Burn Out.
 
 ## Commands
 
@@ -28,6 +28,13 @@ python3 sim.py [--agent mod:Cls]  # browser sim on :8765 (also the "riftbound-si
     agents cheat.
   - Use `self.rng` for all randomness so games stay reproducible from `seed`. `Game` must remain
     deep-copyable and picklable (used for search/rollouts).
+- `step` runs everything that needs no decision, including passing priority or ending the turn
+  when that is a player's only option, so `acting_player` always faces a real choice.
+- Spells are only playable once their card_id has an entry in `SPELL_EFFECTS`; unimplemented
+  cards must stay unplayable rather than resolve with no effect. Tests register dummy cards there.
+- Legal actions are deduplicated: copies of a card in the same zone give one action, and payment
+  options (`Game.payment_options`) differ only in what they leave behind (ready runes, recycled
+  domains, legend use). Keep it that way; every extra action makes PPO's job harder.
 - Agents implement the `Agent` protocol: a `name` attribute and `act(observation, legal) -> Action`.
 
 ## Rules source

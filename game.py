@@ -1,31 +1,58 @@
-"""Game framework: decks, players, setup, the decision loop and agents.
+"""Game engine: decks, setup, the turn, paying costs, the chain and agents.
 
-No gameplay rules yet. Setup puts every card in its starting zone (rules
-111-116, mulligan skipped); then players pass turns and after
-`placeholder_turns` turns a winner is picked at random. The decision loop
-(`acting_player` / `legal_actions` / `step` / `observation`) is what real
-rules and RL training will plug into later.
+Implemented: setup with the mulligan (110-118), the phases of the turn (314-317),
+runes and rune pools (160-168), paying costs (356-357), playing cards onto the
+chain with priority (327-340, 349-359), the cleanup win check (323.1), Hold
+scoring (467-471) and Burn Out (431).
+
+Not yet: movement, showdowns, focus and combat, damage and death, triggered and
+activated abilities, keywords, and spell effects. A spell can only be played
+once it has an entry in SPELL_EFFECTS, so for now the real decks only play units.
+
+The decision loop is `acting_player` / `legal_actions` / `step` / `observation`.
+Everything that needs no decision runs inside `step`, and when a player's only
+option is to pass priority or end their turn, the engine does it for them.
+Game state is plain data (no generators or callbacks), so games deep-copy and
+pickle.
 
     python3 game.py            # headless: random agent vs random agent
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 import random
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
-from cards import CardDef, deck_errors, load_card_pool
-from zones import Battlefield, CardInstance, PlayerZones, Zone, ZoneKind
+from cards import CardDef, Domain, Keyword, deck_errors, load_card_pool
+from zones import Battlefield, CardInstance, PlayerZones, Power, Zone, ZoneKind
 
 ROOT = Path(__file__).parent
 VICTORY_SCORE = 8          # 485.3
 OPENING_HAND = 4           # 116
-TURN_ENERGY = 2
-TURN_RUNES = 2
+MULLIGAN_MAX = 2           # 117.1
+CHANNEL_PER_TURN = 2       # 315.3.b
+SECOND_PLAYER_EXTRA = 1    # 485.7: extra rune on the second player's first Channel Phase
+
+
+# ---------------------------------------------------------------------------
+# Card scripts
+# ---------------------------------------------------------------------------
+
+# card_id -> what the spell does when it resolves (359.3.d). The effects system
+# will fill this in; until then only spells registered here can be played.
+SpellEffect = Callable[["Game", "ChainItem"], None]
+SPELL_EFFECTS: dict[str, SpellEffect] = {}
+
+# Legends with "[E]: [Reaction] — Add [A]" that can help pay costs. The value is
+# whether that Power can only be used to play spells.
+LEGEND_POWER: dict[str, bool] = {
+    "OGN-247": True,       # Kai'Sa, Daughter of the Void
+}
 
 
 # ---------------------------------------------------------------------------
@@ -99,9 +126,24 @@ class Deck:
 # ---------------------------------------------------------------------------
 
 class ActionKind(Enum):
-    PASS = "pass"          # placeholder for "end turn"
-    CONCEDE = "concede"    # 650
-    PLAY_CARD = "play_card"
+    MULLIGAN = "mulligan"      # 117
+    PLAY_CARD = "play_card"    # 349
+    PASS = "pass"              # 338.1.b: pass priority while a chain exists
+    END_TURN = "end_turn"      # 316.9
+    CONCEDE = "concede"        # 650
+
+
+@dataclass(frozen=True)
+class Payment:
+    """How a card's cost gets paid (357). Each rune in `exhaust` adds [1] and each
+    rune in `recycle` adds one Power of its domain (164.2); `legend` uses the
+    legend's Add ability (LEGEND_POWER). A rune can be in both."""
+    exhaust: tuple[int, ...] = ()
+    recycle: tuple[int, ...] = ()
+    legend: bool = False
+
+    def to_json(self) -> dict[str, Any]:
+        return {"exhaust": list(self.exhaust), "recycle": list(self.recycle), "legend": self.legend}
 
 
 @dataclass(frozen=True)
@@ -109,11 +151,17 @@ class Action:
     kind: ActionKind
     label: str
     card_oid: int | None = None
+    payment: Payment | None = None
+    set_aside: tuple[int, ...] = ()     # MULLIGAN: the cards to set aside
 
     def to_json(self) -> dict[str, Any]:
         result: dict[str, Any] = {"kind": self.kind.value, "label": self.label}
         if self.card_oid is not None:
             result["card_oid"] = self.card_oid
+        if self.payment is not None:
+            result["payment"] = self.payment.to_json()
+        if self.kind is ActionKind.MULLIGAN:
+            result["set_aside"] = list(self.set_aside)
         return result
 
 
@@ -146,16 +194,24 @@ class Phase(Enum):
 
 
 class TurnPhase(Enum):
-    START = "start"
-    DRAW = "draw"
-    CHANNEL = "channel"
-    ACTION = "action"
-    END = "end"
+    MULLIGAN = "mulligan"      # 117, before the first turn
+    AWAKEN = "awaken"          # 315.1
+    BEGINNING = "beginning"    # 315.2
+    CHANNEL = "channel"        # 315.3
+    DRAW = "draw"              # 315.4
+    MAIN = "main"              # 316
+    ENDING = "ending"          # 317
+
+
+@dataclass(eq=False)
+class ChainItem:
+    """329: something on the chain. Only cards for now; abilities join later."""
+    obj: CardInstance
+    controller: int
 
 
 class Game:
-    def __init__(self, decks: list[Deck], names: list[str] | None = None, *,
-                 seed: int | None = None, placeholder_turns: int = 6):
+    def __init__(self, decks: list[Deck], names: list[str] | None = None, *, seed: int | None = None):
         if len(decks) != 2:
             raise ValueError("only 1v1 Duel (485) is supported")
         self.rng = random.Random(seed)
@@ -167,13 +223,18 @@ class Game:
         self.battlefields: list[Battlefield] = []
         self.set_aside: list[CardInstance] = []           # unused battlefields (485.5)
         self.chain = Zone(ZoneKind.CHAIN, None)
-        self.placeholder_turns = placeholder_turns
+        self.chain_items: list[ChainItem] = []            # parallel to self.chain.objects
         self.turn = 0
         self.turn_player = 0
-        self.turn_phase = TurnPhase.START
+        self.turn_phase = TurnPhase.MULLIGAN
         self.first_player = 0
         self.phase = Phase.PLAYING
         self.winner: int | None = None
+        self.priority: int | None = None                  # 312
+        self.passes = 0                                   # consecutive passes on the chain (339.1)
+        self.mulligan_queue: list[int] = []
+        self.channel_phases = [0] * len(decks)            # for 485.7
+        self.scored: set[tuple[int, int]] = set()         # (seat, battlefield oid) scored this turn (470)
         self.log: list[str] = []
         self._setup()
 
@@ -201,8 +262,8 @@ class Game:
         self._log(f"{self.names[self.first_player]} goes first")
         for seat in range(len(self.players)):                                   # 116
             self.draw(seat, OPENING_HAND)
-        self.turn = 1
-        self.turn_phase = TurnPhase.ACTION
+        second = self._opponent(self.first_player)
+        self.mulligan_queue = [self.first_player, second]                       # 117: in turn order
 
     # --- zone movement --------------------------------------------------------
 
@@ -227,10 +288,36 @@ class Game:
             obj.become_new_object()                                             # 124
 
     def draw(self, seat: int, n: int = 1) -> None:
-        """413. Burn Out (431) is not implemented yet: drawing from an empty deck does nothing."""
+        """413. Drawing from an empty Main Deck Burns Out first (413.4)."""
         zones = self.players[seat]
-        for obj in zones.main_deck.top(n):
-            self.move(obj, zones.hand)
+        for _ in range(n):
+            if not zones.main_deck.objects:
+                self._burn_out(seat)
+                if not zones.main_deck.objects:
+                    continue        # 431.3: the trash was empty too; the next draw burns out again
+            self.move(zones.main_deck.objects[-1], zones.hand)
+
+    def _burn_out(self, seat: int) -> None:
+        """431.2: recycle the trash into the Main Deck, then an opponent gains 1 point."""
+        zones = self.players[seat]
+        self._recycle_to_main_deck(list(zones.trash))
+        opponent = self._opponent(seat)                   # 431.2.c: the only opponent in a Duel
+        self.points[opponent] += 1
+        self._log(f"{self.names[seat]} burns out; {self.names[opponent]} gains 1 point")
+
+    def _recycle_to_main_deck(self, objs: list[CardInstance]) -> None:
+        """416.5: several cards recycled at once go to the bottom in random order."""
+        objs = list(objs)
+        self.rng.shuffle(objs)
+        for obj in objs:
+            self.move(obj, self.players[obj.owner].main_deck, bottom=True)
+
+    def _channel(self, seat: int, n: int, *, exhausted: bool = False) -> None:
+        """430: put the top n runes of the Rune Deck into the base."""
+        zones = self.players[seat]
+        for rune in zones.rune_deck.top(n):                                     # 430.3
+            self.move(rune, zones.base)
+            rune.exhausted = exhausted                                          # 430.2.a
 
     # --- decision loop --------------------------------------------------------
 
@@ -241,167 +328,356 @@ class Game:
     @property
     def acting_player(self) -> int | None:
         """The seat that must decide next, or None if the game is over."""
-        return None if self.is_over else self.turn_player
+        if self.is_over:
+            return None
+        if self.turn_phase is TurnPhase.MULLIGAN:
+            return self.mulligan_queue[0]
+        return self.priority
 
     def legal_actions(self, seat: int | None = None) -> list[Action]:
         seat = self.acting_player if seat is None else seat
-        if self.is_over or self.turn_phase is not TurnPhase.ACTION or seat != self.acting_player:
+        if self.is_over or seat is None or seat != self.acting_player:
             return []
-        actions = [Action(ActionKind.PASS, "End turn"), Action(ActionKind.CONCEDE, "Concede")]
-        zones = self.players[seat]
-        actions.extend(
-            Action(ActionKind.PLAY_CARD, f"Play {obj.card.name}", obj.oid)
-            for obj in zones.hand
-            if obj.card.is_permanent
-            and self._can_pay_costs(obj.card, zones)
-            and self._can_pay_power(obj.card, zones.rune_pool.power)
-        )
+        if self.turn_phase is TurnPhase.MULLIGAN:
+            actions = self._mulligan_options(seat)
+        else:
+            actions = self._play_options(seat)
+            if self.chain_items:
+                actions.append(Action(ActionKind.PASS, "Pass"))
+            else:
+                actions.append(Action(ActionKind.END_TURN, "End turn"))
+        actions.append(Action(ActionKind.CONCEDE, "Concede"))
         return actions
 
     def step(self, action: Action) -> None:
         seat = self.acting_player
         if action not in self.legal_actions(seat):
             raise ValueError(f"illegal action {action} for seat {seat}")
+        self._apply(seat, action)
+        self._advance()
+
+    def _apply(self, seat: int, action: Action) -> None:
         if action.kind is ActionKind.CONCEDE:
             self._log(f"{self.names[seat]} concedes")
             self._end(winner=self._opponent(seat))
+        elif action.kind is ActionKind.MULLIGAN:
+            self._mulligan(seat, action.set_aside)
         elif action.kind is ActionKind.PLAY_CARD:
             self._play_card(seat, action)
         elif action.kind is ActionKind.PASS:
-            self._log(f"{self.names[seat]} ends turn {self.turn}")
-            if self.turn >= self.placeholder_turns:
-                self._log("placeholder: no rules yet, picking a random winner")
-                self._end(winner=self.rng.randrange(len(self.players)))
-            else:
-                self.turn_phase = TurnPhase.END
-                self._begin_turn(self._opponent(seat))
+            self._pass_priority(seat)
+        elif action.kind is ActionKind.END_TURN:
+            self._end_turn()
+        self._cleanup()
 
-    def _play_card(self, seat: int, action: Action) -> None:
+    def _advance(self) -> None:
+        """Take every action that isn't a real choice: when passing priority or
+        ending the turn is all a player can do (conceding aside), do it for them."""
+        while not self.is_over:
+            seat = self.acting_player
+            options = [a for a in self.legal_actions(seat) if a.kind is not ActionKind.CONCEDE]
+            if len(options) != 1 or options[0].kind not in (ActionKind.PASS, ActionKind.END_TURN):
+                return
+            self._apply(seat, options[0])
+
+    # --- mulligan (117) -------------------------------------------------------
+
+    def _mulligan_options(self, seat: int) -> list[Action]:
+        """Every distinct set of up to 2 cards to set aside. Copies of the same card
+        are interchangeable, so each set of card names is offered once."""
+        hand = self.players[seat].hand.objects
+        actions, seen = [], set()
+        for n in range(MULLIGAN_MAX + 1):
+            for combo in itertools.combinations(hand, n):
+                key = tuple(sorted(o.card.card_id for o in combo))
+                if key in seen:
+                    continue
+                seen.add(key)
+                label = "Keep hand" if not combo else "Mulligan " + ", ".join(o.card.name for o in combo)
+                actions.append(Action(ActionKind.MULLIGAN, label, set_aside=tuple(o.oid for o in combo)))
+        return actions
+
+    def _mulligan(self, seat: int, set_aside: tuple[int, ...]) -> None:
         zones = self.players[seat]
-        obj = next((obj for obj in zones.hand if obj.oid == action.card_oid), None)
-        if obj is None or not obj.card.is_permanent:
-            raise ValueError(f"card {action.card_oid} cannot be played")
-        if obj.card.cost.energy > zones.rune_pool.energy:
-            raise ValueError(f"not enough Energy to play {obj.card.name}")
-        if not self._can_pay_costs(obj.card, zones):
-            raise ValueError(f"not enough ready runes to play {obj.card.name}")
-        if not self._can_pay_power(obj.card, zones.rune_pool.power):
-            raise ValueError(f"not enough Power to play {obj.card.name}")
-        payment = self._power_payment(obj.card, zones.rune_pool.power)
-        self._pay_energy(obj.card.cost.energy, zones, payment or ())
-        self._pay_power(obj.card, zones, payment or ())
-        self.move(obj, zones.base)
+        objs = [o for o in zones.hand if o.oid in set_aside]
+        for obj in objs:                                                        # 117.1
+            zones.hand.objects.remove(obj)
+            obj.zone = None
+        self.draw(seat, len(objs))                                              # 117.2
+        self._recycle_to_main_deck(objs)                                        # 117.3
+        self._log(f"{self.names[seat]} mulligans {len(objs)}")
+        self.mulligan_queue.pop(0)
+        if not self.mulligan_queue:
+            self._start_turn(self.first_player)                                 # 118
 
-    def _can_pay_costs(self, card: CardDef, zones: PlayerZones) -> bool:
-        ready_runes = sum(not rune.exhausted for rune in zones.rune_pool.runes)
-        return (self._can_pay_energy(card.cost.energy, zones)
-            and ready_runes >= card.cost.energy)
+    # --- the turn (314-317) ---------------------------------------------------
 
-    def _can_pay_energy(self, amount: int, zones: PlayerZones) -> bool:
-        ready_runes = sum(not rune.exhausted for rune in zones.rune_pool.runes)
-        return amount <= zones.rune_pool.energy and amount <= ready_runes
-
-    def _pay_energy(self, amount: int, zones: PlayerZones, power_payment: tuple[str, ...]) -> None:
-        if not self._can_pay_energy(amount, zones):
-            raise ValueError("not enough ready runes")
-        zones.rune_pool.energy -= amount
-        for rune in zones.rune_pool.runes:
-            if amount == 0:
-                break
-            if not rune.exhausted:
-                rune.exhausted = True
-                for domain in rune.card.domains:
-                    if domain.value not in power_payment and zones.rune_pool.power.get(domain.value, 0):
-                        zones.rune_pool.power[domain.value] -= 1
-                        if zones.rune_pool.power[domain.value] == 0:
-                            del zones.rune_pool.power[domain.value]
-                amount -= 1
-
-    def _can_pay_power(self, card: CardDef, available: dict[str, int]) -> bool:
-        return self._power_payment(card, available) is not None
-
-    def _pay_power(self, card: CardDef, zones: PlayerZones, payment: tuple[str, ...]) -> None:
-        rune_pool = zones.rune_pool
-        if payment is None:
-            raise ValueError(f"not enough Power to play {card.name}")
-        remaining_runes = list(rune_pool.runes)
-        used_runes: list[CardInstance] = []
-        for domain in payment:
-            rune = next((rune for rune in remaining_runes
-                         if any(rune_domain.value == domain for rune_domain in rune.card.domains)), None)
-            if rune is None:
-                raise ValueError(f"not enough channeled runes to play {card.name}")
-            remaining_runes.remove(rune)
-            used_runes.append(rune)
-        for domain in payment:
-            rune_pool.power[domain] -= 1
-            if rune_pool.power[domain] == 0:
-                del rune_pool.power[domain]
-        for rune in used_runes:
-            rune_pool.runes.remove(rune)
-            zones.rune_deck.objects.insert(0, rune)
-            rune.zone = zones.rune_deck
-
-    def _power_payment(self, card: CardDef, available: dict[str, int]) -> tuple[str, ...] | None:
-        options = [
-            tuple(domain.value for domain in choices)
-            for choices in card.cost.power_options(card.domains)
-        ]
-        order = sorted(range(len(options)), key=lambda index: len(options[index]))
-        payment: list[str | None] = [None] * len(options)
-        remaining = dict(available)
-
-        def assign(position: int) -> bool:
-            if position == len(order):
-                return True
-            index = order[position]
-            for domain in options[index]:
-                if remaining.get(domain, 0):
-                    remaining[domain] -= 1
-                    payment[index] = domain
-                    if assign(position + 1):
-                        return True
-                    remaining[domain] += 1
-            payment[index] = None
-            return False
-
-        return tuple(domain for domain in payment if domain is not None) if assign(0) else None
-
-    def _begin_turn(self, seat: int) -> None:
+    def _start_turn(self, seat: int) -> None:
         self.turn += 1
         self.turn_player = seat
-        self.turn_phase = TurnPhase.START
-        self._ready_runes(seat)
-        self.players[seat].rune_pool.energy += TURN_ENERGY
-        self.turn_phase = TurnPhase.DRAW
-        self.draw(seat)
-        self.turn_phase = TurnPhase.CHANNEL
-        for _ in range(TURN_RUNES):
-            self._channel_rune(seat)
-        self.turn_phase = TurnPhase.ACTION
+        self.scored.clear()
+        self._log(f"Turn {self.turn}: {self.names[seat]}")
 
-    def _ready_runes(self, seat: int) -> None:
-        zones = self.players[seat]
-        for rune in zones.rune_pool.runes:
-            if rune.exhausted:
-                rune.exhausted = False
-                for domain in rune.card.domains:
-                    zones.rune_pool.power[domain.value] = zones.rune_pool.power.get(domain.value, 0) + 1
+        self.turn_phase = TurnPhase.AWAKEN                                      # 315.1
+        for obj in self._on_board(seat):
+            obj.exhausted = False
 
-    def _channel_rune(self, seat: int) -> None:
-        zones = self.players[seat]
-        if not zones.rune_deck.objects:
+        self.turn_phase = TurnPhase.BEGINNING                                   # 315.2
+        for bf in self.battlefields:                                            # 315.2.b: Hold
+            if bf.controller == seat:
+                self._score(seat, bf, conquer=False)
+        if self._cleanup():
             return
-        rune = zones.rune_deck.objects.pop()
-        rune.zone = None
-        zones.rune_pool.runes.append(rune)
-        for domain in rune.card.domains:
-            zones.rune_pool.power[domain.value] = zones.rune_pool.power.get(domain.value, 0) + 1
+
+        self.turn_phase = TurnPhase.CHANNEL                                     # 315.3
+        n = CHANNEL_PER_TURN
+        if seat != self.first_player and self.channel_phases[seat] == 0:
+            n += SECOND_PLAYER_EXTRA                                            # 485.7
+        self.channel_phases[seat] += 1
+        self._channel(seat, n)
+
+        self.turn_phase = TurnPhase.DRAW                                        # 315.4
+        self.draw(seat)
+        if self._cleanup():                                                     # a Burn Out can end the game
+            return
+
+        self.turn_phase = TurnPhase.MAIN                                        # 316
+        for p in self.players:                                                  # 316.3
+            p.rune_pool.empty()
+        self.priority = seat                                                    # 312.2.a
+        self.passes = 0
+
+    def _end_turn(self) -> None:
+        seat = self.turn_player
+        self._log(f"{self.names[seat]} ends turn {self.turn}")
+        self.turn_phase = TurnPhase.ENDING                                      # 317
+        self.priority = None
+        for p in self.players:
+            for obj in self._on_board(p.seat):
+                if obj.card.is_unit:
+                    obj.damage = 0                                              # 317.2.b: heal all units
+            p.rune_pool.empty()                                                 # 317.2.d
+        self._start_turn(self._opponent(seat))                                  # 317.3
+
+    def _on_board(self, seat: int) -> list[CardInstance]:
+        """Every object `seat` controls in their base, their legend zone, and at battlefields."""
+        zones = self.players[seat]
+        objs = [*zones.base, *zones.legend]
+        for bf in self.battlefields:
+            objs += [o for o in bf.units if o.controller == seat]
+        return objs
+
+    # --- scoring and winning --------------------------------------------------
+
+    def _score(self, seat: int, bf: Battlefield, *, conquer: bool) -> None:
+        """469-471: Hold or Conquer a battlefield, at most once per battlefield per turn."""
+        key = (seat, bf.card.oid)
+        if key in self.scored:                                                  # 470
+            return
+        self.scored.add(key)
+        how = "conquers" if conquer else "holds"
+        scored_all = all((seat, b.card.oid) in self.scored for b in self.battlefields)
+        if conquer and self.points[seat] >= VICTORY_SCORE - 1 and not scored_all:
+            self._log(f"{self.names[seat]} {how} {bf.card.card.name} but draws instead of the final point")
+            self.draw(seat)                                                     # 471.1.b.1
+            return
+        self.points[seat] += 1
+        self._log(f"{self.names[seat]} {how} {bf.card.card.name}: {self.points[seat]} points")
+
+    def _cleanup(self) -> bool:
+        """323. Only step 1 (the win check) so far. Returns True if the game ended."""
+        if not self.is_over:
+            best = max(self.points)
+            leaders = [seat for seat, p in enumerate(self.points) if p == best]
+            if best >= VICTORY_SCORE and len(leaders) == 1:                     # 323.1 / 194.2
+                self._end(leaders[0])
+        return self.is_over
 
     def _end(self, winner: int) -> None:
         self.winner = winner
         self.phase = Phase.GAME_OVER
+        self.priority = None
         self._log(f"{self.names[winner]} wins")
+
+    # --- playing cards (349-359) ----------------------------------------------
+
+    def _playable_now(self, seat: int, card: CardDef) -> bool:
+        """Card has rules support, and 308-310 timing allows it."""
+        if card.is_spell and card.card_id not in SPELL_EFFECTS:
+            return False
+        if not (card.is_permanent or card.is_spell):
+            return False
+        if self.chain_items:                                                    # Closed: 309.1.a
+            return card.has_keyword(Keyword.REACTION)
+        # Neutral Open: the turn player, in their Main Phase (310.1.a)
+        return seat == self.turn_player and self.turn_phase is TurnPhase.MAIN
+
+    def _play_options(self, seat: int) -> list[Action]:
+        zones = self.players[seat]
+        actions, seen = [], set()
+        for obj in [*zones.hand, *zones.champion]:                              # 108.3.d
+            key = (obj.zone.kind, obj.card.card_id)        # copies in one zone are interchangeable
+            if key in seen or not self._playable_now(seat, obj.card):
+                continue
+            seen.add(key)
+            for payment in self.payment_options(seat, obj.card):
+                label = f"Play {obj.card.name}"
+                if payment != Payment():
+                    label += f" ({self._describe(seat, payment)})"
+                actions.append(Action(ActionKind.PLAY_CARD, label, obj.oid, payment))
+        return actions
+
+    def _play_card(self, seat: int, action: Action) -> None:
+        zones = self.players[seat]
+        obj = next(o for o in [*zones.hand, *zones.champion] if o.oid == action.card_oid)
+        card = obj.card
+        self.move(obj, self.chain)                                              # 354
+        item = ChainItem(obj, seat)
+        self.chain_items.append(item)
+        self._pay(seat, card, action.payment or Payment())                      # 357
+        self._log(f"{self.names[seat]} plays {card.name}")
+        if card.is_permanent:                                                   # 337.2: resolves at once
+            self.chain_items.remove(item)
+            self.move(obj, zones.base)                                          # 355.2.a: units to base for now
+            obj.exhausted = card.is_unit                                        # 359.2.c-d
+            self._after_resolve()
+        else:
+            self.priority = seat                                                # 337.4
+            self.passes = 0
+
+    def _pass_priority(self, seat: int) -> None:
+        self.passes += 1
+        if self.passes >= len(self.players):                                    # 339.1
+            self._resolve_top()
+        else:
+            self.priority = self._opponent(seat)                                # 339.2
+
+    def _resolve_top(self) -> None:
+        """340.1: the newest item resolves, then the spell goes to its owner's trash."""
+        item = self.chain_items.pop()
+        obj = item.obj
+        self._log(f"{obj.card.name} resolves")
+        SPELL_EFFECTS[obj.card.card_id](self, item)
+        if obj.zone is self.chain:
+            self.move(obj, self.players[obj.owner].trash)                       # 359.3.d
+        self._after_resolve()
+
+    def _after_resolve(self) -> None:
+        self.passes = 0
+        if self.chain_items:
+            self.priority = self.chain_items[-1].controller                     # 340.4
+        elif self.turn_phase is TurnPhase.MAIN:
+            self.priority = self.turn_player                                    # 335
+
+    # --- paying costs (356-357) -----------------------------------------------
+
+    def payment_options(self, seat: int, card: CardDef) -> list[Payment]:
+        """Every sensible way `seat` can pay for `card` right now.
+
+        Energy has no domain and an exhausted rune can still be recycled, so what
+        a payment leaves behind comes down to how many runes stay ready, which
+        domains were recycled, and whether the legend was used. Options are offered
+        once per such outcome. Anything already in the pool is spent first, nothing
+        is added beyond the cost, and options that leave fewer ready runes than
+        another option with the same recycles are dropped.
+        """
+        zones = self.players[seat]
+        pool = zones.rune_pool
+        pips = [p.payable_with(card.domains) for p in card.cost.power]
+        usable = [u for u in pool.power if card.is_spell or not u.spells_only]
+        energy_needed = max(0, card.cost.energy - pool.energy)
+        power_needed = len(pips) - len(_match(pips, usable))
+
+        ready: dict[str, list[CardInstance]] = {}
+        tired: dict[str, list[CardInstance]] = {}
+        for rune in sorted(zones.runes(), key=lambda r: r.oid):
+            (tired if rune.exhausted else ready).setdefault(_rune_domain(rune), []).append(rune)
+        domains = sorted(set(ready) | set(tired))
+
+        legend = zones.legend.objects[0] if zones.legend.objects else None
+        legend_uses = [False]
+        if (power_needed and legend is not None and not legend.exhausted
+                and legend.card.card_id in LEGEND_POWER
+                and (card.is_spell or not LEGEND_POWER[legend.card.card_id])):
+            legend_uses.append(True)
+
+        candidates: dict[tuple, Payment] = {}
+        for exhaust in _splits(energy_needed, [len(ready.get(d, [])) for d in domains]):
+            for use_legend in legend_uses:
+                recycle_total = power_needed - use_legend
+                limits = [len(ready.get(d, [])) + len(tired.get(d, [])) for d in domains]
+                for recycle in _splits(recycle_total, limits):
+                    units = usable + [Power(d) for d, k in zip(domains, recycle) for _ in range(k)]
+                    if use_legend:
+                        units.append(Power("A", LEGEND_POWER[legend.card.card_id]))
+                    if len(_match(pips, units)) < len(pips):
+                        continue
+                    payment, ready_after = _build_payment(domains, ready, tired, exhaust, recycle, use_legend)
+                    candidates.setdefault((tuple(recycle), use_legend, sum(ready_after)), payment)
+
+        # drop options another option beats: same recycles, legend use no worse,
+        # and at least as many ready runes left
+        keys = list(candidates)
+        best = []
+        for key in keys:
+            recycle, use_legend, ready_after = key
+            dominated = any(
+                other != key and other[0] == recycle and other[1] <= use_legend and other[2] >= ready_after
+                for other in keys)
+            if not dominated:
+                best.append(candidates[key])
+        return best
+
+    def _pay(self, seat: int, card: CardDef, payment: Payment) -> None:
+        zones = self.players[seat]
+        pool = zones.rune_pool
+        runes = {r.oid: r for r in zones.runes()}
+        for oid in payment.exhaust:                                             # 164.2.a
+            rune = runes[oid]
+            if rune.exhausted:
+                raise ValueError(f"{rune.card.name} is already exhausted")
+            rune.exhausted = True
+            pool.energy += 1
+        for oid in payment.recycle:                                             # 164.2.b
+            rune = runes[oid]
+            pool.power.append(Power(_rune_domain(rune)))
+            self.move(rune, zones.rune_deck, bottom=True)                       # 416.1.b
+        if payment.legend:
+            legend = zones.legend.objects[0]
+            legend.exhausted = True
+            pool.power.append(Power("A", LEGEND_POWER[legend.card.card_id]))
+
+        if pool.energy < card.cost.energy:
+            raise ValueError(f"not enough Energy to play {card.name}")
+        pips = [p.payable_with(card.domains) for p in card.cost.power]
+        usable = [u for u in pool.power if card.is_spell or not u.spells_only]
+        matched = _match(pips, usable)
+        if len(matched) < len(pips):
+            raise ValueError(f"not enough Power to play {card.name}")
+        pool.energy -= card.cost.energy
+        for unit in matched:
+            pool.power.remove(unit)
+
+    def _describe(self, seat: int, payment: Payment) -> str:
+        runes = {r.oid: r for r in self.players[seat].runes()}
+
+        def domains(oids: tuple[int, ...]) -> str:
+            counts: dict[str, int] = {}
+            for oid in oids:
+                name = Domain(_rune_domain(runes[oid])).name.title()
+                counts[name] = counts.get(name, 0) + 1
+            return " + ".join(f"{n} {name}" for name, n in counts.items())
+
+        parts = []
+        if payment.exhaust:
+            parts.append("exhaust " + domains(payment.exhaust))
+        if payment.recycle:
+            parts.append("recycle " + domains(payment.recycle))
+        if payment.legend:
+            parts.append("use " + self.players[seat].legend.objects[0].card.name)
+        return "; ".join(parts)
+
+    # --- helpers --------------------------------------------------------------
 
     def _opponent(self, seat: int) -> int:
         return (seat + 1) % len(self.players)
@@ -415,20 +691,11 @@ class Game:
         """Everything `viewer` is allowed to know (128). JSON-serializable."""
         players = []
         for seat, zones in enumerate(self.players):
-            rune_cards = (
-                [rune.view() for rune in zones.rune_pool.runes]
-                if viewer == seat
-                else [{"hidden": True} for _ in zones.rune_pool.runes]
-            )
             players.append({
                 "seat": seat,
                 "name": self.names[seat],
                 "points": self.points[seat],
-                "rune_pool": {
-                    "energy": zones.rune_pool.energy,
-                    "power": dict(zones.rune_pool.power),
-                    "runes": rune_cards,
-                },
+                "rune_pool": zones.rune_pool.view(),
                 "zones": {z.kind.value: z.view(viewer) for z in zones.all()},
             })
         return {
@@ -437,13 +704,75 @@ class Game:
             "turn_player": self.turn_player,
             "turn_phase": self.turn_phase.value,
             "acting_player": self.acting_player,
+            "priority": self.priority,
             "phase": self.phase.value,
             "victory_score": VICTORY_SCORE,
             "winner": self.winner,
             "players": players,
             "battlefields": [bf.view(viewer) for bf in self.battlefields],
-            "chain": self.chain.view(viewer),
+            "chain": [dict(item.obj.view(), chain_controller=item.controller) for item in self.chain_items],
         }
+
+
+def _rune_domain(rune: CardInstance) -> str:
+    """164.2.b.1: the Power a recycled rune adds. Basic runes have one domain."""
+    return min(d.value for d in rune.card.domains)
+
+
+def _splits(total: int, limits: list[int]) -> list[list[int]]:
+    """Every way to split `total` into len(limits) parts with part i <= limits[i]."""
+    if not limits:
+        return [[]] if total == 0 else []
+    result = []
+    for first in range(min(total, limits[0]) + 1):
+        for rest in _splits(total - first, limits[1:]):
+            result.append([first, *rest])
+    return result
+
+
+def _match(pips: list[frozenset[Domain]], units: list[Power]) -> list[Power]:
+    """Largest set of Power `units` that pays the `pips` (bipartite matching)."""
+    owner: dict[int, int] = {}          # unit index -> pip index
+
+    def fits(unit: Power, pip: frozenset[Domain]) -> bool:
+        return unit.domain == "A" or Domain(unit.domain) in pip
+
+    def augment(p: int, seen: set[int]) -> bool:
+        for u, unit in enumerate(units):
+            if u in seen or not fits(unit, pips[p]):
+                continue
+            seen.add(u)
+            if u not in owner or augment(owner[u], seen):
+                owner[u] = p
+                return True
+        return False
+
+    for p in range(len(pips)):
+        augment(p, set())
+    return [units[u] for u in owner]
+
+
+def _build_payment(domains: list[str], ready: dict[str, list[CardInstance]],
+                   tired: dict[str, list[CardInstance]], exhaust: list[int],
+                   recycle: list[int], use_legend: bool) -> tuple[Payment, list[int]]:
+    """Pick concrete runes for a per-domain split. Recycle already-exhausted runes
+    first, then runes exhausted for this cost, and only then other ready runes."""
+    exhaust_oids: list[int] = []
+    recycle_oids: list[int] = []
+    ready_after = []
+    for d, ex, k in zip(domains, exhaust, recycle):
+        r, t = ready.get(d, []), tired.get(d, [])
+        exhausted_now = r[:ex]
+        from_tired = t[:k]
+        k -= len(from_tired)
+        from_exhausted_now = exhausted_now[:k]
+        k -= len(from_exhausted_now)
+        from_ready = r[ex:ex + k]
+        exhaust_oids += [o.oid for o in exhausted_now]
+        recycle_oids += [o.oid for o in (*from_tired, *from_exhausted_now, *from_ready)]
+        ready_after.append(len(r) - ex - len(from_ready))
+    payment = Payment(tuple(sorted(exhaust_oids)), tuple(sorted(recycle_oids)), use_legend)
+    return payment, ready_after
 
 
 def play_game(game: Game, agents: list[Agent]) -> int:
@@ -465,6 +794,9 @@ if __name__ == "__main__":
     a, b = load_demo_decks()
     assert not a.errors(), a.errors()
     wins = [0, 0]
+    turns = 0
     for i in range(200):
-        wins[play_game(Game([a, b], seed=i), [RandomAgent(i), RandomAgent(i + 1)])] += 1
-    print(f"200 games, wins by seat: {wins}")
+        game = Game([a, b], seed=i)
+        wins[play_game(game, [RandomAgent(i), RandomAgent(i + 1)])] += 1
+        turns += game.turn
+    print(f"200 games, wins by seat: {wins}, average length {turns / 200:.1f} turns")

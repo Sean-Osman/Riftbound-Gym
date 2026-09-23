@@ -8,11 +8,11 @@ against each other to measure which matchups are favored and which are not. As
 a side effect, the trained agents double as practice opponents you can play
 against in the browser.
 
-> **Status: early.** Deck loading, game setup, zones, runes/energy and playing
-> permanents are in place. Combat, spells, abilities, scoring and the
-> showdown/chain system are not implemented yet, so games currently end with
-> a placeholder random winner after a fixed number of turns. There is no PPO
-> training code yet.
+> **Status: early.** Setup and the mulligan, the full turn structure, runes and
+> paying costs, the chain with priority and Reactions, Hold scoring and Burn Out
+> are in place. Movement, combat, showdowns, card abilities and spell effects
+> are not, so the only cards that can be played are units, and games are
+> decided by Burn Out. There is no PPO training code yet.
 
 ## Why
 
@@ -117,8 +117,8 @@ while not game.is_over:
   (the opponent's hand, deck order, etc.), so agents can't cheat.
 - `legal_actions(seat)` enumerates every legal move, which maps directly
   onto a masked discrete action space for PPO.
-- `acting_player` is whoever must decide next. Once Reactions and focus are
-  implemented, that will not always be the turn player.
+- `acting_player` is whoever must decide next: the player with priority, which
+  switches to the opponent while spells wait on the chain for Reactions.
 - Games are seeded and deterministic, and `Game` objects can be deep-copied
   and pickled.
 
@@ -181,13 +181,16 @@ To add a deck:
 
 **Phase 1: Rules engine** (in progress)
 - [x] Card model, deck legality, zones, visibility
-- [x] Setup, turn structure, runes/energy, playing permanents
+- [x] Setup, mulligan and the phases of the turn
+- [x] Runes, the rune pool and paying costs
+- [x] The chain, priority and Reactions
+- [x] Victory at 8 points, Hold scoring and burning out (running out of cards)
 - [x] Browser sim and pluggable agent interface
 - [x] Random legal-move agent
-- [ ] Movement, combat, and conquering/holding battlefields
-- [ ] Spells, the chain, Reactions and focus
-- [ ] Triggered, activated and static abilities
-- [ ] Scoring, victory at 8 points, and burning out (running out of cards)
+- [ ] Movement, showdowns and focus, combat, and conquering battlefields
+- [ ] Damage, death and "this turn" effects
+- [ ] Spell effects, and triggered, activated and static abilities
+- [ ] Keywords (Accelerate, Legion, Deflect, Assault, …)
 - [ ] Kai'Sa mirror fully playable under the real rules
 
 **Phase 2: Training**

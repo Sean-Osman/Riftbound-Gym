@@ -177,16 +177,30 @@ class Battlefield:
         }
 
 
+@dataclass(frozen=True)
+class Power:
+    """163.2: one Power in a rune pool."""
+    domain: str                  # domain letter, or "A" for Universal Power (163.2.b)
+    spells_only: bool = False    # e.g. Kai'Sa's "Use only to play spells"
+
+
 @dataclass
 class RunePool:
     """165: available Energy and Power. Not a zone and not a game object."""
     energy: int = 0
-    power: dict[str, int] = field(default_factory=dict)    # domain letter or "A" -> amount
-    runes: list[CardInstance] = field(default_factory=list)
+    power: list[Power] = field(default_factory=list)
 
     def empty(self) -> None:
+        """167.1: unspent Energy and Power are lost."""
         self.energy = 0
         self.power.clear()
+
+    def view(self) -> dict[str, Any]:
+        power: dict[str, int] = {}
+        for p in self.power:
+            key = p.domain + (" (spells)" if p.spells_only else "")
+            power[key] = power.get(key, 0) + 1
+        return {"energy": self.energy, "power": power}
 
 
 class PlayerZones:
@@ -203,6 +217,10 @@ class PlayerZones:
         self.legend = Zone(ZoneKind.LEGEND, seat)
         self.base = Zone(ZoneKind.BASE, seat)
         self.rune_pool = RunePool()
+
+    def runes(self) -> list[CardInstance]:
+        """Channeled runes sit in the base (323.7)."""
+        return [o for o in self.base if o.card.is_rune]
 
     def all(self) -> list[Zone]:
         return [self.main_deck, self.rune_deck, self.hand, self.trash, self.banishment,
