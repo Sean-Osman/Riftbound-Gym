@@ -2,11 +2,13 @@
 
 Implemented: setup with the mulligan (110-118), the phases of the turn (314-317),
 runes and rune pools (160-168), paying costs (356-357), playing cards onto the
-chain with priority (327-340, 349-359), the cleanup win check (323.1), Hold
+chain with priority (327-340, 349-359), Standard Moves (144), battlefield
+control and non-combat showdowns with focus (190, 341-348), cleanups (323),
 scoring (467-471) and Burn Out (431).
 
-Not yet: movement, showdowns, focus and combat, damage and death, triggered and
-activated abilities, keywords, and spell effects. A spell can only be played
+Not yet: combat, damage and death, triggered and activated abilities,
+keywords, and spell effects. Until combat exists, units can't move to a
+battlefield that has enemy units. A spell can only be played
 once it has an entry in SPELL_EFFECTS, so for now the real decks only play units.
 
 The decision loop is `acting_player` / `legal_actions` / `step` / `observation`.
@@ -138,7 +140,8 @@ class Deck:
 class ActionKind(Enum):
     MULLIGAN = "mulligan"      # 117
     PLAY_CARD = "play_card"    # 349
-    PASS = "pass"              # 338.1.b: pass priority while a chain exists
+    MOVE = "move"              # 144: Standard Move
+    PASS = "pass"              # 338.1.b / 347.2: pass priority on a chain, or focus in a showdown
     END_TURN = "end_turn"      # 316.9
     CONCEDE = "concede"        # 650
 
@@ -163,6 +166,8 @@ class Action:
     card_oid: int | None = None
     payment: Payment | None = None
     set_aside: tuple[int, ...] = ()     # MULLIGAN: the cards to set aside
+    units: tuple[int, ...] = ()         # MOVE: the units moving together (144.3)
+    destination: int | None = None      # PLAY_CARD / MOVE: battlefield index, None for base
 
     def to_json(self) -> dict[str, Any]:
         result: dict[str, Any] = {"kind": self.kind.value, "label": self.label}
@@ -172,6 +177,10 @@ class Action:
             result["payment"] = self.payment.to_json()
         if self.kind is ActionKind.MULLIGAN:
             result["set_aside"] = list(self.set_aside)
+        if self.kind is ActionKind.MOVE:
+            result["units"] = list(self.units)
+        if self.kind in (ActionKind.MOVE, ActionKind.PLAY_CARD):
+            result["destination"] = self.destination
         return result
 
 
@@ -241,6 +250,9 @@ class Game:
         self.phase = Phase.PLAYING
         self.winner: int | None = None
         self.priority: int | None = None                  # 312
+        self.focus: int | None = None                     # 313
+        self.showdown: int | None = None                  # index of the battlefield with a showdown
+        self.showdown_passes = 0                          # consecutive focus passes (347.2.a)
         self.passes = 0                                   # consecutive passes on the chain (339.1)
         self.mulligan_queue: list[int] = []
         self.channel_phases = [0] * len(decks)            # for 485.7
@@ -354,7 +366,10 @@ class Game:
             actions = self._play_options(seat)
             if self.chain_items:
                 actions.append(Action(ActionKind.PASS, "Pass"))
+            elif self.showdown is not None:
+                actions.append(Action(ActionKind.PASS, "Pass focus"))
             else:
+                actions += self._move_options(seat)
                 actions.append(Action(ActionKind.END_TURN, "End turn"))
         actions.append(Action(ActionKind.CONCEDE, "Concede"))
         return actions
@@ -374,8 +389,13 @@ class Game:
             self._mulligan(seat, action.set_aside)
         elif action.kind is ActionKind.PLAY_CARD:
             self._play_card(seat, action)
+        elif action.kind is ActionKind.MOVE:
+            self._standard_move(seat, action)
         elif action.kind is ActionKind.PASS:
-            self._pass_priority(seat)
+            if self.chain_items:
+                self._pass_priority(seat)
+            else:
+                self._pass_focus(seat)
         elif action.kind is ActionKind.END_TURN:
             self._end_turn()
         self._cleanup()
@@ -456,6 +476,7 @@ class Game:
             p.rune_pool.empty()
         self.priority = seat                                                    # 312.2.a
         self.passes = 0
+        self._cleanup()                                                         # 319.2
 
     def _end_turn(self) -> None:
         seat = self.turn_player
@@ -477,6 +498,93 @@ class Game:
             objs += [o for o in bf.units if o.controller == seat]
         return objs
 
+    # --- movement (144, 445-453) and showdowns (341-348) -----------------------
+
+    def _move_options(self, seat: int) -> list[Action]:
+        """Standard Moves (144): ready units go from base to a battlefield, or from
+        battlefields back to base, several at once if they share a destination.
+        Units that are interchangeable (same card, place and state) are grouped,
+        so each distinct set of movers is offered once per destination."""
+        if not (seat == self.turn_player and self.turn_phase is TurnPhase.MAIN):   # 144.1
+            return []
+        zones = self.players[seat]
+        in_base = [o for o in zones.base if o.card.is_unit and not o.exhausted]
+        at_bfs = [o for bf in self.battlefields for o in bf.units
+                  if o.controller == seat and not o.exhausted]
+        actions = []
+        for i, bf in enumerate(self.battlefields):                              # 144.4.a
+            if any(o.controller != seat for o in bf.units):
+                continue            # would start a combat, which isn't implemented yet
+            actions += self._move_groups(in_base, i, self._bf_name(bf))
+        actions += self._move_groups(at_bfs, None, "base")                      # 144.4.b
+        return actions
+
+    def _move_groups(self, units: list[CardInstance], dest: int | None, dest_name: str) -> list[Action]:
+        groups: dict[tuple, list[CardInstance]] = {}
+        for obj in sorted(units, key=lambda o: o.oid):
+            where = obj.zone.kind.value if obj.zone else ""
+            groups.setdefault((where, obj.card.card_id, obj.damage, obj.buffs), []).append(obj)
+        members = list(groups.values())
+        actions = []
+        for counts in itertools.product(*(range(len(m) + 1) for m in members)):
+            chosen = [obj for m, n in zip(members, counts) for obj in m[:n]]
+            if not chosen:
+                continue
+            names = ", ".join(f"{n}x {m[0].card.name}" if n > 1 else m[0].card.name
+                              for m, n in zip(members, counts) if n)
+            actions.append(Action(ActionKind.MOVE, f"Move {names} to {dest_name}",
+                                  units=tuple(o.oid for o in chosen), destination=dest))
+        return actions
+
+    def _standard_move(self, seat: int, action: Action) -> None:
+        zones = self.players[seat]
+        movable = [*zones.base, *(o for bf in self.battlefields for o in bf.units)]
+        units = [o for o in movable if o.oid in action.units]
+        for obj in units:
+            obj.exhausted = True                                                # 144.2 / 144.3.c
+        if action.destination is None:
+            dest = zones.base
+            self._log(f"{self.names[seat]} moves {len(units)} unit(s) to base")
+        else:
+            bf = self.battlefields[action.destination]
+            dest = bf.units
+            if not bf.contested and bf.controller != seat:                      # 450
+                bf.contested, bf.contested_by = True, seat
+            self._log(f"{self.names[seat]} moves {', '.join(o.card.name for o in units)} "
+                      f"to {self._bf_name(bf)}")
+        for obj in units:
+            self.move(obj, dest)
+
+    def _begin_showdown(self, index: int) -> None:
+        bf = self.battlefields[index]
+        self.showdown = index
+        self.focus = self.priority = bf.contested_by                            # 345 / 313.2
+        self.showdown_passes = 0
+        self._log(f"Showdown at {self._bf_name(bf)}")
+
+    def _pass_focus(self, seat: int) -> None:
+        self.showdown_passes += 1
+        if self.showdown_passes >= len(self.players):                           # 347.2.a
+            self._end_showdown()
+        else:
+            self.focus = self.priority = self._opponent(seat)                   # 347.2.b
+
+    def _end_showdown(self) -> None:
+        """348.2: a Non-Combat Showdown closes. If one player's units remain,
+        they establish control, which is a Conquer if not yet scored this turn."""
+        bf = self.battlefields[self.showdown]
+        self.showdown = self.focus = None
+        self.showdown_passes = 0
+        present = {o.controller for o in bf.units}
+        if len(present) == 1:
+            [seat] = present
+            if bf.controller != seat:                                           # 348.2.a
+                bf.controller = seat
+                bf.contested, bf.contested_by = False, None
+                self._log(f"{self.names[seat]} takes control of {self._bf_name(bf)}")
+                self._score(seat, bf, conquer=True)                             # 348.2.a.1
+        self.priority = self.turn_player if self.turn_phase is TurnPhase.MAIN else None
+
     # --- scoring and winning --------------------------------------------------
 
     def _score(self, seat: int, bf: Battlefield, *, conquer: bool) -> None:
@@ -488,20 +596,42 @@ class Game:
         how = "conquers" if conquer else "holds"
         scored_all = all((seat, b.card.oid) in self.scored for b in self.battlefields)
         if conquer and self.points[seat] >= VICTORY_SCORE - 1 and not scored_all:
-            self._log(f"{self.names[seat]} {how} {bf.card.card.name} but draws instead of the final point")
+            self._log(f"{self.names[seat]} {how} {self._bf_name(bf)} but draws instead of the final point")
             self.draw(seat)                                                     # 471.1.b.1
             return
         self.points[seat] += 1
-        self._log(f"{self.names[seat]} {how} {bf.card.card.name}: {self.points[seat]} points")
+        self._log(f"{self.names[seat]} {how} {self._bf_name(bf)}: {self.points[seat]} points")
 
     def _cleanup(self) -> bool:
-        """323. Only step 1 (the win check) so far. Returns True if the game ended."""
-        if not self.is_over:
-            best = max(self.points)
-            leaders = [seat for seat, p in enumerate(self.points) if p == best]
-            if best >= VICTORY_SCORE and len(leaders) == 1:                     # 323.1 / 194.2
-                self._end(leaders[0])
-        return self.is_over
+        """323, minus the steps that need combat or damage. Returns True if the game ended."""
+        if self.is_over:
+            return True
+        best = max(self.points)
+        leaders = [seat for seat, p in enumerate(self.points) if p == best]
+        if best >= VICTORY_SCORE and len(leaders) == 1:                         # 323.1 / 194.2
+            self._end(leaders[0])
+            return True
+
+        open_state = not self.chain_items
+        for i, bf in enumerate(self.battlefields):
+            present = {o.controller for o in bf.units}
+            busy = self.showdown == i
+            if bf.controller is not None and bf.controller not in present and open_state and not busy:
+                self._log(f"{self.names[bf.controller]} loses control of {self._bf_name(bf)}")
+                bf.controller = None                                            # 323.6 / 190.4.c
+            if bf.contested and bf.contested_by not in present and not busy:
+                bf.contested, bf.contested_by = False, None                     # 323.11
+            others = present - {bf.controller}
+            if not bf.contested and len(others) == 1 and not busy:
+                bf.contested, bf.contested_by = True, others.pop()              # 323.11.a
+
+        if self.showdown is None and open_state and self.turn_phase is TurnPhase.MAIN:   # 323.12 / 344.2
+            staged = [i for i, bf in enumerate(self.battlefields)
+                      if bf.contested and any(o.controller == bf.contested_by for o in bf.units)]
+            if staged:
+                # the turn player chooses; one move can only stage one showdown
+                self._begin_showdown(staged[0])
+        return False
 
     def _end(self, winner: int) -> None:
         self.winner = winner
@@ -519,6 +649,8 @@ class Game:
             return False
         if self.chain_items:                                                    # Closed: 309.1.a
             return card.has_keyword(Keyword.REACTION)
+        if self.showdown is not None:                                           # Showdown Open: 308.1.a
+            return card.has_keyword(Keyword.ACTION) or card.has_keyword(Keyword.REACTION)
         # Neutral Open: the turn player, in their Main Phase (310.1.a)
         return seat == self.turn_player and self.turn_phase is TurnPhase.MAIN
 
@@ -530,11 +662,17 @@ class Game:
             if key in seen or not self._playable_now(seat, obj.card):
                 continue
             seen.add(key)
+            destinations: list[int | None] = [None]
+            if obj.card.is_unit:                                                # 355.2.a
+                destinations += [i for i, bf in enumerate(self.battlefields) if bf.controller == seat]
             for payment in self.payment_options(seat, obj.card):
-                label = f"Play {obj.card.name}"
-                if payment != Payment():
-                    label += f" ({self._describe(seat, payment)})"
-                actions.append(Action(ActionKind.PLAY_CARD, label, obj.oid, payment))
+                for dest in destinations:
+                    label = f"Play {obj.card.name}"
+                    if dest is not None:
+                        label += f" to {self._bf_name(self.battlefields[dest])}"
+                    if payment != Payment():
+                        label += f" ({self._describe(seat, payment)})"
+                    actions.append(Action(ActionKind.PLAY_CARD, label, obj.oid, payment, destination=dest))
         return actions
 
     def _play_card(self, seat: int, action: Action) -> None:
@@ -548,7 +686,8 @@ class Game:
         self._log(f"{self.names[seat]} plays {card.name}")
         if card.is_permanent:                                                   # 337.2: resolves at once
             self.chain_items.remove(item)
-            self.move(obj, zones.base)                                          # 355.2.a: units to base for now
+            dest = zones.base if action.destination is None else self.battlefields[action.destination].units
+            self.move(obj, dest)                                                # 355.2
             obj.exhausted = card.is_unit                                        # 359.2.c-d
             self._after_resolve()
         else:
@@ -576,6 +715,9 @@ class Game:
         self.passes = 0
         if self.chain_items:
             self.priority = self.chain_items[-1].controller                     # 340.4
+        elif self.showdown is not None:
+            self.focus = self.priority = self._opponent(self.focus)             # 340.2.a / 346
+            self.showdown_passes = 0
         elif self.turn_phase is TurnPhase.MAIN:
             self.priority = self.turn_player                                    # 335
 
@@ -689,6 +831,13 @@ class Game:
 
     # --- helpers --------------------------------------------------------------
 
+    def _bf_name(self, bf: Battlefield) -> str:
+        """A battlefield's name, plus whose it is when both players brought the same one."""
+        name = bf.card.card.name
+        if sum(b.card.card.name == name for b in self.battlefields) > 1:
+            name += f" ({self.names[bf.card.owner]}'s)"
+        return name
+
     def _opponent(self, seat: int) -> int:
         return (seat + 1) % len(self.players)
 
@@ -715,6 +864,8 @@ class Game:
             "turn_phase": self.turn_phase.value,
             "acting_player": self.acting_player,
             "priority": self.priority,
+            "focus": self.focus,
+            "showdown": self.showdown,
             "phase": self.phase.value,
             "victory_score": VICTORY_SCORE,
             "winner": self.winner,

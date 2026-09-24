@@ -9,10 +9,11 @@ a side effect, the trained agents double as practice opponents you can play
 against in the browser.
 
 > **Status: early.** Setup and the mulligan, the full turn structure, runes and
-> paying costs, the chain with priority and Reactions, Hold scoring and Burn Out
-> are in place. Movement, combat, showdowns, card abilities and spell effects
-> are not, so the only cards that can be played are units, and games are
-> decided by Burn Out. There is no PPO training code yet.
+> paying costs, the chain with priority and Reactions, moving units, showdowns
+> with focus, conquering and holding battlefields, and Burn Out are in place.
+> Combat, card abilities and spell effects are not: only units can be played,
+> and until combat exists units can't move onto a battlefield with enemy units.
+> There is no PPO training code yet.
 
 ## Why
 
@@ -184,10 +185,11 @@ To add a deck:
 - [x] Setup, mulligan and the phases of the turn
 - [x] Runes, the rune pool and paying costs
 - [x] The chain, priority and Reactions
+- [x] Moving units, showdowns and focus, conquering battlefields
 - [x] Victory at 8 points, Hold scoring and burning out (running out of cards)
 - [x] Browser sim and pluggable agent interface
 - [x] Random legal-move agent
-- [ ] Movement, showdowns and focus, combat, and conquering battlefields
+- [ ] Combat
 - [ ] Damage, death and "this turn" effects
 - [ ] Spell effects, and triggered, activated and static abilities
 - [ ] Keywords (Accelerate, Legion, Deflect, Assault, …)

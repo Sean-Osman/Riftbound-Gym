@@ -17,6 +17,7 @@ def _spell(card_id, name, cost, keywords=None):
 
 SORCERY = _spell("TEST-SORCERY", "Test Sorcery", Cost(1))
 REACTION = _spell("TEST-REACTION", "Test Reaction", Cost(1), {Keyword.REACTION: None})
+ACTION = _spell("TEST-ACTION", "Test Action", Cost(1), {Keyword.ACTION: None})
 CALM_SPELL = CardDef("TEST-CALM-SPELL", "Calm Spell", types=frozenset({CardType.SPELL}),
                      domains=frozenset({Domain.CALM}), cost=Cost(0, parse_power("G")))
 DUAL_UNIT = CardDef("TEST-DUAL-UNIT", "Dual Unit", types=frozenset({CardType.UNIT}),
@@ -24,14 +25,14 @@ DUAL_UNIT = CardDef("TEST-DUAL-UNIT", "Dual Unit", types=frozenset({CardType.UNI
 CALM_UNIT = CardDef("TEST-CALM-UNIT", "Calm Unit", types=frozenset({CardType.UNIT}),
                     domains=frozenset({Domain.CALM}), cost=Cost(0, parse_power("G")), might=1)
 
-for _card in (SORCERY, REACTION, CALM_SPELL):
+for _card in (SORCERY, REACTION, ACTION, CALM_SPELL):
     SPELL_EFFECTS[_card.card_id] = lambda game, item: None
 LEGEND_POWER["LEG-TEST"] = True          # the test legend gets Kai'Sa's "Add [A] for spells"
 
 
 def make_test_deck():
     pool = make_vanilla_pool()
-    main = [pool["VAN-2"]] * 12 + [SORCERY] * 3 + [REACTION] * 3 + [CALM_SPELL] * 3 + [CALM_UNIT] * 3 + [DUAL_UNIT] * 3 \
+    main = [pool["VAN-2"]] * 12 + [SORCERY] * 3 + [REACTION] * 3 + [ACTION] * 3 + [CALM_SPELL] * 3 + [CALM_UNIT] * 3 + [DUAL_UNIT] * 3 \
         + [pool[f"VAN-{c}"] for c in (1, 3, 4, 5, 6) for _ in range(3)]
     return Deck("Test", pool["LEG-TEST"], pool["CHAMP-TEST"], tuple(main),
                 tuple([pool["RUNE-R"]] * 6 + [pool["RUNE-G"]] * 6),
@@ -81,6 +82,19 @@ def plays(g, card_id, seat=None):
     return [a for a in g.legal_actions(seat) if a.kind is ActionKind.PLAY_CARD
             and next(o for o in [*g.players[seat].hand, *g.players[seat].champion]
                      if o.oid == a.card_oid).card.card_id == card_id]
+
+
+def ready_unit(g, seat, card_id, where=None):
+    """Put a ready copy of a unit in `seat`'s base (or at a battlefield)."""
+    zones = g.players[seat]
+    obj = next(o for o in [*zones.main_deck, *zones.hand] if o.card.card_id == card_id)
+    g.move(obj, zones.base if where is None else where.units)
+    obj.exhausted = False
+    return obj
+
+
+def moves(g, dest=None):
+    return [a for a in g.legal_actions() if a.kind is ActionKind.MOVE and a.destination == dest]
 
 
 def clear_hand(g, seat):
@@ -250,6 +264,7 @@ def test_holding_a_battlefield_scores_in_the_beginning_phase():
     g = started()
     other = 1 - g.acting_player
     g.battlefields[0].controller = other
+    ready_unit(g, other, "OGN-013", g.battlefields[0])
     g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.END_TURN))
     assert g.turn_player == other and g.points[other] == 1
 
@@ -491,3 +506,119 @@ def test_random_play_keeps_every_card_and_never_leaks_hidden_info():
                     assert all(c == {"hidden": True} for c in hand)
                 g.step(agents[seat].act(g.observation(seat), g.legal_actions(seat)))
                 assert [count(0), count(1)] == totals
+
+
+# --- movement, showdowns and focus ---------------------------------------------
+
+def quiet_game():
+    """Test decks; the turn player holds nothing, the opponent holds nothing, both have 2 runes."""
+    g = started(decks=[make_test_deck()] * 2)
+    me, opp = g.acting_player, 1 - g.acting_player
+    for seat in (me, opp):
+        clear_hand(g, seat)
+        g.players[seat].champion.objects.clear()
+        set_runes(g, seat, "RR")
+    return g, me, opp
+
+
+def test_moving_to_an_empty_battlefield_conquers_it_after_a_showdown():
+    g, me, opp = quiet_game()
+    unit = ready_unit(g, me, "VAN-2")
+    to_hand(g, me, "VAN-1")                       # keep me from auto-ending the turn afterwards
+    [move] = moves(g, 0)
+
+    g.step(move)
+
+    bf = g.battlefields[0]
+    assert unit in bf.units.objects and unit.exhausted              # 144.2
+    assert "Showdown at " + bf.card.card.name in g.log
+    assert bf.controller == me and not bf.contested and g.showdown is None
+    assert g.points[me] == 1 and g.acting_player == me              # conquered, back to my Main Phase
+
+
+def test_identical_units_move_as_one_group_option():
+    g, me, opp = quiet_game()
+    ready_unit(g, me, "VAN-2")
+    ready_unit(g, me, "VAN-2")
+    ready_unit(g, me, "VAN-1")
+    labels = [a.label for a in moves(g, 0)]
+    assert len(labels) == 5                        # {0,1,2} Vanilla 2 x {0,1} Vanilla 1, minus moving none
+    assert any("2x Vanilla 2" in label for label in labels)
+
+
+def test_the_mover_gets_focus_and_focus_alternates_until_both_pass():
+    g, me, opp = quiet_game()
+    ready_unit(g, me, "VAN-2")
+    to_hand(g, me, "TEST-ACTION")
+    to_hand(g, opp, "TEST-REACTION")
+    g.step(moves(g, 0)[0])
+
+    assert g.showdown == 0 and g.focus == me and g.acting_player == me
+    kinds = {a.kind for a in g.legal_actions()}
+    assert ActionKind.MOVE not in kinds and ActionKind.END_TURN not in kinds     # 144.1.c
+    assert plays(g, "TEST-ACTION")
+
+    g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.PASS))
+    assert g.focus == opp and g.acting_player == opp
+    g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.PASS))
+    assert g.showdown is None and g.battlefields[0].controller == me
+
+
+def test_a_spell_in_a_showdown_passes_focus_once_its_chain_resolves():
+    g, me, opp = quiet_game()
+    ready_unit(g, me, "VAN-2")
+    to_hand(g, me, "TEST-ACTION")
+    to_hand(g, opp, "TEST-REACTION")
+    g.step(moves(g, 0)[0])
+
+    g.step(plays(g, "TEST-ACTION")[0])
+    assert g.chain_items and g.acting_player == opp               # opp may react
+    g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.PASS))
+
+    assert not g.chain_items and g.showdown == 0
+    assert g.focus == opp and g.acting_player == opp              # 346
+    g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.PASS))
+    # I have nothing left to play, so my pass is automatic and the showdown ends
+    assert g.showdown is None and g.battlefields[0].controller == me
+
+
+def test_only_actions_and_reactions_can_be_played_in_a_showdown():
+    g, me, opp = quiet_game()
+    ready_unit(g, me, "VAN-2")
+    to_hand(g, me, "TEST-ACTION")
+    to_hand(g, me, "TEST-SORCERY")
+    to_hand(g, me, "VAN-1")
+    g.step(moves(g, 0)[0])
+    assert plays(g, "TEST-ACTION")
+    assert plays(g, "TEST-SORCERY") == [] and plays(g, "VAN-1") == []
+
+
+def test_leaving_a_battlefield_gives_up_control():
+    g, me, opp = quiet_game()
+    bf = g.battlefields[0]
+    unit = ready_unit(g, me, "VAN-2", bf)
+    bf.controller = me
+    to_hand(g, me, "VAN-1")
+    [move] = [a for a in moves(g, None) if a.units == (unit.oid,)]
+    g.step(move)
+    assert unit.zone is g.players[me].base and bf.controller is None     # 190.4.c
+
+
+def test_units_can_be_played_to_a_battlefield_i_control():
+    g, me, opp = quiet_game()
+    bf = g.battlefields[0]
+    ready_unit(g, me, "VAN-2", bf)
+    bf.controller = me
+    to_hand(g, me, "VAN-1")
+    destinations = {a.destination for a in plays(g, "VAN-1")}
+    assert destinations == {None, 0}
+    g.step(next(a for a in plays(g, "VAN-1") if a.destination == 0))
+    assert sum(o.card.card_id == "VAN-1" for o in bf.units) == 1 and bf.controller == me
+
+
+def test_units_cannot_move_onto_enemy_units_until_combat_exists():
+    g, me, opp = quiet_game()
+    ready_unit(g, opp, "VAN-2", g.battlefields[0])
+    g.battlefields[0].controller = opp
+    ready_unit(g, me, "VAN-2")
+    assert moves(g, 0) == [] and moves(g, 1)

@@ -223,7 +223,9 @@ function playerHtml(p, obs, isYou) {
 function battlefieldHtml(bf, obs) {
   cardsByOid.set(bf.card.oid, bf.card);
   const ctrl = (bf.controller == null ? "Uncontrolled" : `Controlled by ${esc(obs.players[bf.controller].name)}`)
-    + ` · brought by ${esc(obs.players[bf.card.owner].name)}`;
+    + ` · brought by ${esc(obs.players[bf.card.owner].name)}`
+    + (obs.showdown === obs.battlefields.indexOf(bf) ? ` · showdown, ${esc(obs.players[obs.focus].name)} has focus`
+       : bf.contested ? ` · contested by ${esc(obs.players[bf.contested_by].name)}` : "");
   const img = bf.card.art_url ? `<img src="${esc(bf.card.art_url)}" alt="" loading="lazy" onerror="this.remove()">` : "";
   const units = bf.units.length ? bf.units.map(cardHtml).join("") : `<span class="empty">No units</span>`;
   return `<div class="bf">
@@ -259,7 +261,7 @@ function render() {
     ? `Game over · ${obs.players[obs.winner].name} won`
     : obs.turn_phase === "mulligan"
       ? `Mulligan · ${obs.players[obs.acting_player].name} to choose · seed ${state.seed}`
-      : `Turn ${obs.turn} · ${obs.turn_phase} phase · ${obs.players[obs.acting_player].name} to act · seed ${state.seed}`;
+      : `Turn ${obs.turn} · ${obs.showdown != null ? "showdown" : obs.turn_phase + " phase"} · ${obs.players[obs.acting_player].name} to act · seed ${state.seed}`;
 
   $("actions").innerHTML = state.legal_actions.length
     ? state.legal_actions.map((a, i) =>

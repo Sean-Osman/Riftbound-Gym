@@ -162,6 +162,7 @@ class Battlefield:
     facedown: Zone
     controller: int | None = None
     contested: bool = False
+    contested_by: int | None = None      # 190.3.a: the player who applied Contested
 
     @classmethod
     def create(cls, card: CardInstance) -> Battlefield:
@@ -172,6 +173,7 @@ class Battlefield:
             "card": self.card.view(),
             "controller": self.controller,
             "contested": self.contested,
+            "contested_by": self.contested_by,
             "units": self.units.view(viewer)["objects"],
             "facedown": self.facedown.view(viewer),
         }
