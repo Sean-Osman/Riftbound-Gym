@@ -68,8 +68,10 @@ def test_training_runs_saves_resumes_and_the_agent_plays(tmp_path, monkeypatch):
     with pytest.raises(FileExistsError):
         ppo.Trainer(cfg)
     cfg.iterations = 3
+    cfg.lr = 1e-4
     trainer = ppo.Trainer(cfg, resume=True)
     assert trainer.iteration == 2
+    assert trainer.opt.param_groups[0]["lr"] == 1e-4          # not the saved optimizer's 3e-4
     trainer.train()
     assert len((tmp_path / "t" / "log.jsonl").read_text().splitlines()) == 3
 
@@ -77,3 +79,14 @@ def test_training_runs_saves_resumes_and_the_agent_plays(tmp_path, monkeypatch):
     assert agent.name.endswith("#3")
     winner = play_game(Game(list(load_demo_decks()), seed=5), [agent, RandomAgent(5)])
     assert winner in (0, 1)
+
+
+def test_updates_stop_early_once_kl_passes_the_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(ppo, "CHECKPOINTS", tmp_path)
+    base = dict(games=4, workers=0, d_model=32, layers=1, heads=2, minibatch=32, epochs=4,
+                lr=1e-2, device="cpu")
+    capped = ppo.Trainer(ppo.Config(run="capped", target_kl=1e-6, **base))
+    samples = [s for r in capped._play(capped._specs()) for s in r["samples"]]
+    assert capped.update(samples)["update_frac"] < 1
+    free = ppo.Trainer(ppo.Config(run="free", target_kl=0.0, **base))
+    assert free.update(samples)["update_frac"] == 1

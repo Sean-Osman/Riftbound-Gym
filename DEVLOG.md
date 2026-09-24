@@ -135,6 +135,17 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 
 ---
 
+## 2026-09-24: PPO update-size fixes
+
+- The first real run (`kaisa-v1`, 176 iterations) beat GreedyAgent about 60% of the time
+  but leveled off after iteration 120 while `approx_kl` grew from 0.011 to 0.04.
+- **KL early stopping:** `--target-kl` (default 0.02) ends an update's epochs once a
+  minibatch's approx KL passes 1.5x the target. The log's `update_frac` shows how much
+  of the planned update ran.
+- **`--lr` now applies on `--resume`.** The saved Adam state carried the old learning
+  rate and silently overrode it.
+- The log also records `lr`. Tests cover both fixes.
+
 ## 2026-09-24: RL environment, scripted baseline and PPO trainer
 
 - **`env.py`**: `Encoder` turns an observation plus the legal actions into arrays:

@@ -66,6 +66,7 @@ class Config:
     epochs: int = 4
     minibatch: int = 512
     clip: float = 0.2
+    target_kl: float = 0.02         # stop an update's epochs once KL passes 1.5x this (0: never)
     vf_coef: float = 0.5
     ent_coef: float = 0.01
     max_grad_norm: float = 0.5
@@ -330,6 +331,8 @@ class Trainer:
         self.opt = torch.optim.Adam(self.model.parameters(), lr=cfg.lr, eps=1e-5)
         if resume and "optimizer" in ckpt:
             self.opt.load_state_dict(ckpt["optimizer"])
+            for group in self.opt.param_groups:            # the saved state carries the old lr
+                group["lr"] = cfg.lr
         self.pool_dir.mkdir(parents=True, exist_ok=True)
         self.executor = None
         if cfg.workers > 0:
@@ -387,7 +390,11 @@ class Trainer:
         stats: dict[str, list[float]] = {}
         order = np.arange(len(samples))
         np_rng = np.random.default_rng(self.iteration)
+        planned = cfg.epochs * math.ceil(len(order) / cfg.minibatch)
+        steps, stopped = 0, False
         for _ in range(cfg.epochs):
+            if stopped:
+                break
             np_rng.shuffle(order)
             for start in range(0, len(order), cfg.minibatch):
                 mb = [samples[i] for i in order[start:start + cfg.minibatch]]
@@ -410,15 +417,22 @@ class Trainer:
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), cfg.max_grad_norm)
                 self.opt.step()
+                steps += 1
                 with torch.no_grad():
+                    kl = ((ratio - 1) - (logp - old_logp)).mean()
                     for k, v in (("policy_loss", pg), ("value_loss", v_loss), ("entropy", entropy),
-                                 ("approx_kl", ((ratio - 1) - (logp - old_logp)).mean()),
+                                 ("approx_kl", kl),
                                  ("clip_frac", ((ratio - 1).abs() > cfg.clip).float().mean())):
                         stats.setdefault(k, []).append(float(v))
+                if cfg.target_kl and float(kl) > 1.5 * cfg.target_kl:
+                    stopped = True                                  # the policy moved far enough
+                    break
         values = np.array([s.value for s in samples])
         returns = np.array([s.ret for s in samples])
         var = returns.var()
         result = {k: float(np.mean(v)) for k, v in stats.items()}
+        result["update_frac"] = steps / planned
+        result["lr"] = self.opt.param_groups[0]["lr"]
         result["explained_variance"] = float(1 - (returns - values).var() / var) if var > 0 else 0.0
         self.model.eval()
         return result
@@ -468,7 +482,7 @@ class Trainer:
 
 def _format(row: dict[str, Any]) -> str:
     keys = ["iteration", "samples", "decisions_per_s", "game_length", "policy_loss", "value_loss",
-            "entropy", "approx_kl", "clip_frac", "explained_variance", "win_vs_greedy", "win_vs_pool",
+            "entropy", "approx_kl", "clip_frac", "update_frac", "explained_variance", "win_vs_greedy", "win_vs_pool",
             "eval_vs_random", "eval_vs_greedy"]
     parts = []
     for k in keys:
