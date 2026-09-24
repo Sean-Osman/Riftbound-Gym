@@ -85,9 +85,13 @@ def plays(g, card_id, seat=None):
 
 
 def ready_unit(g, seat, card_id, where=None):
-    """Put a ready copy of a unit in `seat`'s base (or at a battlefield)."""
+    """Put a ready copy of a unit in `seat`'s base (or at a battlefield). A unit
+    placed on an empty, uncontrolled battlefield gives `seat` control of it, as
+    it would have in a real game; otherwise the next cleanup would contest it."""
     zones = g.players[seat]
     obj = next(o for o in [*zones.main_deck, *zones.hand] if o.card.card_id == card_id)
+    if where is not None and where.controller is None and not where.units.objects:
+        where.controller = seat
     g.move(obj, zones.base if where is None else where.units)
     obj.exhausted = False
     return obj

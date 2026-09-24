@@ -94,6 +94,10 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 - **Card data** comes from `import_sheet.py`. The sheet has one domain column, so
   dual-domain cards need `OVERRIDES`. Only the Kai'Sa deck's cards are in
   `card_data/`.
+- **Test setup must be reachable.** Tests build positions by hand. A position
+  that couldn't happen in a real game (units on an uncontrolled battlefield outside
+  a showdown, damage left over from an earlier turn) makes the engine do surprising
+  but correct things in its next cleanup. Use the helpers in `test_game.py`.
 - **Test battlefields.** `kaisa_game()` in the tests swaps in plain battlefields
   (a vanilla `BF-1` card) so battlefield abilities don't interfere. Use
   `use_battlefield()` to put a specific one back.
@@ -103,6 +107,36 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   progress.
 
 ---
+
+## 2026-09-23: Interaction tests
+
+- New `test_interactions.py` (28 tests) covers cards working together:
+  - damage and Might changes stacking (a shrink on a damaged unit kills it, and
+    shrinks stop at the minimum)
+  - trigger vs spell ordering on the chain (Ravenbloom Student)
+  - both players stacking Reactions, and responding to a trigger (Retreat vs
+    Thousand-Tailed Watcher)
+  - Darius counting cards played on the opponent's turn
+  - Kai'Sa's legend paying for a Reaction
+  - spells during a combat showdown (shrinking or removing units, Retreating the
+    attacker, Cleave on either side)
+  - the defender choosing which attacker dies
+  - Deathknell and conquer triggers after combat
+  - Accelerated Kai'Sa attacking the turn she's played
+  - Reaver's Row handing the battlefield over
+  - Deflect paid per target, Legion after a spell
+  - extra turns and first-turn effects, banished cards and Burn Out, and the
+    final-point rule
+- The tests found no engine bugs, but they corrected two of my rules assumptions:
+  - A Reaction in the acting player's own hand means passing isn't automatic.
+  - Assault raises Might, and Might is also toughness: an attacker with Assault is
+    harder to kill, not just harder-hitting (142.4.b).
+- Checked by deliberately breaking the engine three ways (printed Might instead of
+  current Might, first-in-first-out chain resolution, no Deathknell). The tests
+  caught each one.
+- The test helper `ready_unit()` now gives a player control of an empty
+  battlefield they place a unit on. Otherwise the next cleanup would (correctly)
+  contest it and start a showdown, a state a real game can't reach.
 
 ## 2026-09-23: Every Kai'Sa card, triggers, keywords and extra turns
 
