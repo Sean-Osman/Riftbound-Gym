@@ -88,6 +88,13 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 
 ---
 
+## 2026-09-23: Concede is off by default
+
+- `Game(..., allow_concede=False)` is the default, so RL agents never see a Concede
+  action. A random early policy would concede at some point in most games, and a
+  learned policy could learn to give up in positions it could win, which would skew
+  matchup win rates. The browser sim passes `allow_concede=True` for humans.
+
 ## 2026-09-23: Combat
 
 - Moving onto a battlefield with enemy units now starts a **combat**, which removes

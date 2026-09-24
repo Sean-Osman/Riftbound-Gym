@@ -42,7 +42,7 @@ class Session:
         names = ["You", f"Agent ({self.agent.name})"]
         if self.human_seat == 1:
             names.reverse()
-        self.game = Game(list(load_demo_decks()), names, seed=self.seed)
+        self.game = Game(list(load_demo_decks()), names, seed=self.seed, allow_concede=True)
         self.run_agent()
 
     def run_agent(self) -> None:

@@ -386,7 +386,7 @@ def test_a_spell_waits_on_the_chain_for_reactions():
     g.step(sorcery)
     # I have nothing else to play, so I pass automatically and the opponent may react
     assert len(g.chain_items) == 1 and g.acting_player == opp
-    assert {a.kind for a in g.legal_actions()} == {ActionKind.PLAY_CARD, ActionKind.PASS, ActionKind.CONCEDE}
+    assert {a.kind for a in g.legal_actions()} == {ActionKind.PLAY_CARD, ActionKind.PASS}
 
     g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.PASS))
 
@@ -467,8 +467,12 @@ def test_random_games_end_with_a_winner():
             assert g.legal_actions() == []
 
 
-def test_concede():
+def test_concede_is_only_offered_when_allowed():
     g = started()
+    assert all(a.kind is not ActionKind.CONCEDE for a in g.legal_actions())
+
+    g = Game(list(load_demo_decks()), seed=0, allow_concede=True)
+    keep_hands(g)
     seat = g.acting_player
     g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.CONCEDE))
     assert g.winner == 1 - seat

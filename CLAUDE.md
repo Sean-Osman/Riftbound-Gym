@@ -35,6 +35,8 @@ python3 sim.py [--agent mod:Cls]  # browser sim on :8765 (also the "riftbound-si
 - Legal actions are deduplicated: copies of a card in the same zone give one action, and payment
   options (`Game.payment_options`) differ only in what they leave behind (ready runes, recycled
   domains, legend use). Moves group interchangeable units the same way. Keep it that way; every extra action makes PPO's job harder.
+- Concede is only offered with `Game(..., allow_concede=True)` (the sim does this). Keep it off
+  for anything RL-facing.
 - Agents implement the `Agent` protocol: a `name` attribute and `act(observation, legal) -> Action`.
 
 ## Rules source

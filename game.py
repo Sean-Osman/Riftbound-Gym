@@ -233,11 +233,16 @@ class ChainItem:
 
 
 class Game:
-    def __init__(self, decks: list[Deck], names: list[str] | None = None, *, seed: int | None = None):
+    def __init__(self, decks: list[Deck], names: list[str] | None = None, *, seed: int | None = None,
+                 allow_concede: bool = False):
+        """`allow_concede` offers Concede (650) as an action. It is off by default so
+        RL agents never see it: conceding would end early training games at random
+        and skew matchup win rates. The browser sim turns it on for humans."""
         if len(decks) != 2:
             raise ValueError("only 1v1 Duel (485) is supported")
         self.rng = random.Random(seed)
         self.seed = seed
+        self.allow_concede = allow_concede
         self.names = names or [f"Player {i + 1}" for i in range(len(decks))]
         self.decks = decks
         self.players = [PlayerZones(i) for i in range(len(decks))]
@@ -381,7 +386,8 @@ class Game:
             else:
                 actions += self._move_options(seat)
                 actions.append(Action(ActionKind.END_TURN, "End turn"))
-        actions.append(Action(ActionKind.CONCEDE, "Concede"))
+        if self.allow_concede:
+            actions.append(Action(ActionKind.CONCEDE, "Concede"))
         return actions
 
     def step(self, action: Action) -> None:
