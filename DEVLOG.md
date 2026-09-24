@@ -67,11 +67,18 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   can still be recycled. An effect that cares *which* runes are ready (for example
   "ready a Fury rune") would break that assumption.
 - **Combinatorial action counts.** Group moves, damage assignment and spell targets
-  multiply with payment options. The most seen in 100 random Kai'Sa games was 168
-  actions at once; a wide board could produce many more. For PPO, switch to
-  step-by-step selection (pick the card, then targets, then payment).
-- **Speed.** Enumerating every action is now the main cost: 200 random games take
-  about 12 s (about 3 s before targets and triggers). Profile before RL training.
+  multiply with payment options. The most seen in 300 random Kai'Sa games was 168
+  actions at once (mean 8, p99 46); a wide board could produce many more. The PPO
+  policy scores each legal action, so any count works, but cost grows with it. If
+  boards get much wider, switch to step-by-step selection (card, then targets, then
+  payment).
+- **Speed.** Enumerating every action is the main cost (`payment_options`). Without
+  `cache_actions`, `step` enumerates them about 4.5 times per decision (validation,
+  then auto-passing). With it, a single process plays about 1,000 decisions/s
+  including encoding.
+- **`cache_actions=True` assumes only `step` changes the game.** The cache is dropped
+  when an action is applied; anything that edits state directly (tests, scripts poking
+  at a Game) must leave it off (the default) or it will see stale actions.
 - **Object ids** come from a process-wide counter and change whenever a card moves to
   or from a non-board zone (rule 124). Don't store oids across games or use them to
   replay a game. Replay from the seed plus the list of chosen action *indices*.
@@ -101,12 +108,60 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 - **Test battlefields.** `kaisa_game()` in the tests swaps in plain battlefields
   (a vanilla `BF-1` card) so battlefield abilities don't interfere. Use
   `use_battlefield()` to put a specific one back.
-- **pytest isn't a declared dependency** (there is no requirements file). Install
-  it with `pip install pytest`.
+- **Dependencies.** The engine is stdlib-only; `requirements.txt` adds numpy, torch
+  and pytest for RL and tests. Use a venv (`.venv/` is gitignored). Run the sim with
+  the venv's Python when loading `ppo:PPOAgent`, since the system Python has no torch.
 - **The sim server** keeps a single game in memory. Restarting it loses the game in
   progress.
 
+### RL (env.py, ppo.py)
+- **The card vocabulary is saved in each checkpoint.** `CardVocab` maps card ids to
+  embedding rows. A new run takes every card in `card_data/`; to use new cards with an
+  old checkpoint, extend its vocab (`CardVocab.extended`, which appends) and grow the
+  embedding. Never re-sort it.
+- **Changing the encoding breaks checkpoints.** `TOKEN_FEATURES`, `GLOBAL_FEATURES` and
+  `ACTION_FEATURES` fix the input sizes. Adding a feature means retraining (or copying
+  weights by hand).
+- **Encoding reads only the observation.** It must never take anything from `Game`
+  directly; `test_encoding_never_depends_on_hidden_information` swaps the opponent's
+  hand with their deck and checks the encoding doesn't change.
+- **Two actions must never encode the same.** If they did, the policy couldn't tell
+  them apart. `test_encoding_shapes_and_pointers` checks it on random positions; a new
+  action field needs a matching feature.
+- **Token cap.** Only the first `MAX_TOKENS` (64) tokens are kept. Hands and the board
+  come first and trash piles last; random Kai'Sa games peak around 41.
+- **Draws.** Games cut off at `max_decisions` (500) give both seats 0. None happened in
+  300 random games.
+
 ---
+
+## 2026-09-24: RL environment, scripted baseline and PPO trainer
+
+- **`env.py`**: `Encoder` turns an observation plus the legal actions into arrays:
+  card tokens (card index + 39 features), a 75-number global vector, and one row per
+  legal action (39 features + 4 pointers into the tokens for the card played, targets,
+  movers, ...). Runes are summed per domain; trash and banishment become one token per
+  distinct card with a count; the opponent's hand is only a count. `RiftboundEnv`
+  drives both seats one decision at a time; `OpponentEnv` is a Gymnasium-style
+  single-agent view against any Agent.
+- **`agents.py`**: `GreedyAgent`, a scripted baseline (play the most expensive card,
+  aim spells sensibly, attack where it wins). Beats RandomAgent 95% over 200 games.
+- **`ppo.py`**: a transformer policy that scores each legal action, parallel rollout
+  workers, PPO with GAE (gamma 1, lambda 0.95), self-play with a pool of past snapshots
+  plus some GreedyAgent games, evaluation against Random and Greedy every 10
+  iterations, checkpoints and a JSONL log. `PPOAgent` plays a checkpoint in the sim.
+  On an M2 (7 rollout workers, learner on MPS) an iteration of 64 games (~4,000
+  decisions) takes about 5 s.
+- **Engine:**
+  - `Game(..., cache_actions=True)` reuses legal actions between steps. That cuts
+    action enumeration about 4x and gives the same games (tested).
+  - Observations now include public information the encoder needs: `cards_played`
+    (Legion, Darius), `scored_this_turn` (470), the source `card_id` of abilities on
+    the chain, and what each Decision option points at.
+- `requirements.txt` added. Tests: `test_env.py` (encoding shapes, pointers, distinct
+  action rows, no hidden-information leak, cache equivalence, env rewards and cutoff,
+  GreedyAgent vs Random) and `test_ppo.py` (masking, batching invariance, GAE, a
+  train/save/resume/play round trip).
 
 ## 2026-09-23: Interaction tests
 

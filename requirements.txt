@@ -1,0 +1,4 @@
+# The engine and sim need only the standard library. These are for RL and tests.
+numpy>=2.0
+torch>=2.4
+pytest>=8.0

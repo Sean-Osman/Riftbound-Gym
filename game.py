@@ -255,16 +255,23 @@ class Decision:
 
 class Game:
     def __init__(self, decks: list[Deck], names: list[str] | None = None, *, seed: int | None = None,
-                 allow_concede: bool = False):
+                 allow_concede: bool = False, cache_actions: bool = False):
         """`allow_concede` offers Concede (650) as an action. It is off by default so
         RL agents never see it: conceding would end early training games at random
-        and skew matchup win rates. The browser sim turns it on for humans."""
+        and skew matchup win rates. The browser sim turns it on for humans.
+
+        `cache_actions` reuses the legal actions between `step` calls instead of
+        enumerating them again (about 4x fewer enumerations per decision). Only use
+        it when nothing changes the game except `step`, as in RL rollouts: tests
+        that edit the state by hand would see stale actions."""
         if len(decks) != 2:
             raise ValueError("only 1v1 Duel (485) is supported")
         n = len(decks)
         self.rng = random.Random(seed)
         self.seed = seed
         self.allow_concede = allow_concede
+        self.cache_actions = cache_actions
+        self._legal_cache: tuple[int, list[Action]] | None = None
         self.names = names or [f"Player {i + 1}" for i in range(n)]
         self.decks = decks
         self.players = [PlayerZones(i) for i in range(n)]
@@ -471,6 +478,8 @@ class Game:
         seat = self.acting_player if seat is None else seat
         if self.is_over or seat is None or seat != self.acting_player:
             return []
+        if self._legal_cache is not None and self._legal_cache[0] == seat:
+            return list(self._legal_cache[1])
         if self.turn_phase is TurnPhase.MULLIGAN:
             actions = self._mulligan_options(seat)
         elif self.decision is not None:
@@ -489,6 +498,8 @@ class Game:
                 actions.append(Action(ActionKind.END_TURN, "End turn"))
         if self.allow_concede:
             actions.append(Action(ActionKind.CONCEDE, "Concede"))
+        if self.cache_actions:
+            self._legal_cache = (seat, list(actions))
         return actions
 
     def step(self, action: Action) -> None:
@@ -500,6 +511,7 @@ class Game:
         self._advance()
 
     def _apply(self, seat: int, action: Action) -> None:
+        self._legal_cache = None
         if action.kind is ActionKind.CONCEDE:
             self._log(f"{self.names[seat]} concedes")
             self._end(winner=self._opponent(seat))
@@ -1274,7 +1286,10 @@ class Game:
             })
         chain = []
         for item in self.chain_items:
-            entry = item.obj.view() if item.obj is not None else {"ability": item.label}
+            if item.obj is not None:
+                entry = item.obj.view()
+            else:
+                entry = {"ability": item.label, "card_id": item.trigger[0], "source_oid": item.source_oid}
             chain.append(dict(entry, chain_controller=item.controller))
         return {
             "viewer": viewer,
@@ -1287,8 +1302,14 @@ class Game:
             "showdown": self.showdown,
             "attacker": self.attacker,
             "assigning": self.assigning[0] if self.assigning else None,
-            "decision": None if self.decision is None else {"seat": self.decision.seat,
-                                                            "kind": self.decision.kind},
+            "decision": None if self.decision is None else {
+                "seat": self.decision.seat,
+                "kind": self.decision.kind,
+                "options": [_option_view(label, value) for label, value in self.decision.options],
+            },
+            "cards_played": list(self.cards_played),
+            "scored_this_turn": sorted([seat, i] for seat, oid in self.scored
+                                       for i, bf in enumerate(self.battlefields) if bf.card.oid == oid),
             "extra_turns": list(self.extra_turns),
             "phase": self.phase.value,
             "victory_score": VICTORY_SCORE,
@@ -1298,6 +1319,17 @@ class Game:
             "chain": chain,
             "unit_might": {str(u.oid): self.might(u) for u in self.units()},
         }
+
+
+def _option_view(label: str, value: Any) -> dict[str, Any]:
+    """A Decision option for observations: what it points at, if anything.
+    Showdown options are battlefield indices; Reaver's Row options are (unit, oid)."""
+    view: dict[str, Any] = {"label": label, "declines": value is None}
+    if isinstance(value, tuple):
+        view["oid"] = value[1]
+    elif isinstance(value, int) and not isinstance(value, bool):
+        view["battlefield"] = value
+    return view
 
 
 def _trigger_script(item: ChainItem) -> TriggerScript:

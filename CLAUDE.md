@@ -8,9 +8,10 @@ incomplete: only the cards in the Kai'Sa deck are scripted (see DEVLOG.md for kn
 ## Commands
 
 ```bash
-python3 -m pytest                 # tests (pytest-style functions in test_*.py; pip install pytest if missing)
-python3 game.py                   # 200 headless random-vs-random games
-python3 sim.py [--agent mod:Cls]  # browser sim on :8765 (also the "riftbound-sim" config in .claude/launch.json)
+.venv/bin/python -m pytest                 # tests (setup: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)
+python3 game.py                            # 200 headless random-vs-random games
+python3 sim.py [--agent mod:Cls]           # browser sim on :8765 (also the "riftbound-sim" config in .claude/launch.json)
+.venv/bin/python ppo.py --run NAME         # PPO self-play training; output in checkpoints/NAME/
 ```
 
 ## Architecture
@@ -43,6 +44,11 @@ python3 sim.py [--agent mod:Cls]  # browser sim on :8765 (also the "riftbound-si
 - Concede is only offered with `Game(..., allow_concede=True)` (the sim does this). Keep it off
   for anything RL-facing.
 - Agents implement the `Agent` protocol: a `name` attribute and `act(observation, legal) -> Action`.
+- `env.py` encodes observations and legal actions for the policy. It reads only
+  `observation(seat)`, never `Game`, so hidden information can't leak; any new field
+  it needs goes into the observation first. Every legal action must encode to a
+  distinct row. `ppo.py` holds the model and trainer; `agents.py` the scripted baselines.
+- The engine itself stays stdlib-only; numpy and torch are only for env.py / ppo.py.
 
 ## Rules source
 
