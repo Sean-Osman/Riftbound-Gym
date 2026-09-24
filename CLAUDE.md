@@ -3,8 +3,7 @@
 A rules-accurate simulator for the Riftbound TCG, built as an RL environment. The end goal is to
 train PPO agents to pilot meta decks, measure matchup win rates between decks, and serve the agents
 as practice opponents in the browser sim. See README.md for the roadmap. The rules engine is still
-incomplete: there is no combat or card abilities yet. Until combat exists, units can't move onto
-a battlefield with enemy units.
+incomplete: there are no card abilities, keywords or spell effects yet, so only units can be played.
 
 ## Commands
 
@@ -46,6 +45,9 @@ the rule number in a trailing comment (`# 485.3`). If the rules are ambiguous, a
 guessing.
 
 ## Workflow
+
+- **DEVLOG.md**: every engine change adds a dated entry (what changed and which rules), and the
+  Known pitfalls section stays current. Read the pitfalls before changing the engine.
 
 - **Tests with every change**: any change to game logic, cards, zones or deck loading adds or
   updates tests in `test_*.py`. Run the full suite before calling a change done.

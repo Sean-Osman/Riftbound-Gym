@@ -3,12 +3,11 @@
 Implemented: setup with the mulligan (110-118), the phases of the turn (314-317),
 runes and rune pools (160-168), paying costs (356-357), playing cards onto the
 chain with priority (327-340, 349-359), Standard Moves (144), battlefield
-control and non-combat showdowns with focus (190, 341-348), cleanups (323),
-scoring (467-471) and Burn Out (431).
+control, showdowns with focus (190, 341-348), combat (459-466), cleanups
+(323), scoring (467-471) and Burn Out (431).
 
-Not yet: combat, damage and death, triggered and activated abilities,
-keywords, and spell effects. Until combat exists, units can't move to a
-battlefield that has enemy units. A spell can only be played
+Not yet: triggered and activated abilities, "this turn" effects, keywords
+(Assault, Tank, Deflect, ...), and spell effects. A spell can only be played
 once it has an entry in SPELL_EFFECTS, so for now the real decks only play units.
 
 The decision loop is `acting_player` / `legal_actions` / `step` / `observation`.
@@ -141,6 +140,7 @@ class ActionKind(Enum):
     MULLIGAN = "mulligan"      # 117
     PLAY_CARD = "play_card"    # 349
     MOVE = "move"              # 144: Standard Move
+    ASSIGN_DAMAGE = "assign_damage"   # 465.2.c: combat damage assignment
     PASS = "pass"              # 338.1.b / 347.2: pass priority on a chain, or focus in a showdown
     END_TURN = "end_turn"      # 316.9
     CONCEDE = "concede"        # 650
@@ -168,6 +168,7 @@ class Action:
     set_aside: tuple[int, ...] = ()     # MULLIGAN: the cards to set aside
     units: tuple[int, ...] = ()         # MOVE: the units moving together (144.3)
     destination: int | None = None      # PLAY_CARD / MOVE: battlefield index, None for base
+    damage: tuple[tuple[int, int], ...] = ()   # ASSIGN_DAMAGE: (unit oid, amount) pairs
 
     def to_json(self) -> dict[str, Any]:
         result: dict[str, Any] = {"kind": self.kind.value, "label": self.label}
@@ -181,6 +182,8 @@ class Action:
             result["units"] = list(self.units)
         if self.kind in (ActionKind.MOVE, ActionKind.PLAY_CARD):
             result["destination"] = self.destination
+        if self.kind is ActionKind.ASSIGN_DAMAGE:
+            result["damage"] = [list(pair) for pair in self.damage]
         return result
 
 
@@ -253,6 +256,9 @@ class Game:
         self.focus: int | None = None                     # 313
         self.showdown: int | None = None                  # index of the battlefield with a showdown
         self.showdown_passes = 0                          # consecutive focus passes (347.2.a)
+        self.attacker: int | None = None                  # set while the showdown is a combat (464.2.c)
+        self.assigning: list[int] = []                    # seats still to assign combat damage
+        self.assignments: dict[int, tuple[tuple[int, int], ...]] = {}
         self.passes = 0                                   # consecutive passes on the chain (339.1)
         self.mulligan_queue: list[int] = []
         self.channel_phases = [0] * len(decks)            # for 485.7
@@ -354,6 +360,8 @@ class Game:
             return None
         if self.turn_phase is TurnPhase.MULLIGAN:
             return self.mulligan_queue[0]
+        if self.assigning:
+            return self.assigning[0]
         return self.priority
 
     def legal_actions(self, seat: int | None = None) -> list[Action]:
@@ -362,6 +370,8 @@ class Game:
             return []
         if self.turn_phase is TurnPhase.MULLIGAN:
             actions = self._mulligan_options(seat)
+        elif self.assigning:
+            actions = self._assignment_options(seat)
         else:
             actions = self._play_options(seat)
             if self.chain_items:
@@ -391,6 +401,8 @@ class Game:
             self._play_card(seat, action)
         elif action.kind is ActionKind.MOVE:
             self._standard_move(seat, action)
+        elif action.kind is ActionKind.ASSIGN_DAMAGE:
+            self._assign_damage(seat, action.damage)
         elif action.kind is ActionKind.PASS:
             if self.chain_items:
                 self._pass_priority(seat)
@@ -401,12 +413,14 @@ class Game:
         self._cleanup()
 
     def _advance(self) -> None:
-        """Take every action that isn't a real choice: when passing priority or
-        ending the turn is all a player can do (conceding aside), do it for them."""
+        """Take every action that isn't a real choice: when passing, ending the turn
+        or a forced damage assignment is all a player can do (conceding aside), do
+        it for them."""
+        automatic = (ActionKind.PASS, ActionKind.END_TURN, ActionKind.ASSIGN_DAMAGE)
         while not self.is_over:
             seat = self.acting_player
             options = [a for a in self.legal_actions(seat) if a.kind is not ActionKind.CONCEDE]
-            if len(options) != 1 or options[0].kind not in (ActionKind.PASS, ActionKind.END_TURN):
+            if len(options) != 1 or options[0].kind not in automatic:
                 return
             self._apply(seat, options[0])
 
@@ -513,8 +527,6 @@ class Game:
                   if o.controller == seat and not o.exhausted]
         actions = []
         for i, bf in enumerate(self.battlefields):                              # 144.4.a
-            if any(o.controller != seat for o in bf.units):
-                continue            # would start a combat, which isn't implemented yet
             actions += self._move_groups(in_base, i, self._bf_name(bf))
         actions += self._move_groups(at_bfs, None, "base")                      # 144.4.b
         return actions
@@ -560,7 +572,16 @@ class Game:
         self.showdown = index
         self.focus = self.priority = bf.contested_by                            # 345 / 313.2
         self.showdown_passes = 0
-        self._log(f"Showdown at {self._bf_name(bf)}")
+        if len({o.controller for o in bf.units}) > 1:
+            self._begin_combat()
+        else:
+            self._log(f"Showdown at {self._bf_name(bf)}")
+
+    def _begin_combat(self) -> None:
+        """464.2: the player who contested the battlefield attacks and has focus."""
+        bf = self.battlefields[self.showdown]
+        self.attacker = bf.contested_by                                         # 464.2.c.1
+        self._log(f"Combat at {self._bf_name(bf)}: {self.names[self.attacker]} attacks")
 
     def _pass_focus(self, seat: int) -> None:
         self.showdown_passes += 1
@@ -572,6 +593,8 @@ class Game:
     def _end_showdown(self) -> None:
         """348.2: a Non-Combat Showdown closes. If one player's units remain,
         they establish control, which is a Conquer if not yet scored this turn."""
+        if self.attacker is not None:
+            return self._combat_damage_step()                                   # 348.1
         bf = self.battlefields[self.showdown]
         self.showdown = self.focus = None
         self.showdown_passes = 0
@@ -584,6 +607,103 @@ class Game:
                 self._log(f"{self.names[seat]} takes control of {self._bf_name(bf)}")
                 self._score(seat, bf, conquer=True)                             # 348.2.a.1
         self.priority = self.turn_player if self.turn_phase is TurnPhase.MAIN else None
+
+    # --- combat (459-466) ------------------------------------------------------
+
+    def _combat_damage_step(self) -> None:
+        """465: if both sides still have units here, each assigns its total Might
+        as damage, attacker first; then it is all dealt at once."""
+        bf = self.battlefields[self.showdown]
+        sides = {o.controller for o in bf.units}
+        self.priority = None
+        if len(sides) == 2:
+            self.assigning = [self.attacker, self._opponent(self.attacker)]     # 465.2.c
+            self.assignments = {}
+        else:
+            self._combat_resolution()
+
+    def _assignment_options(self, seat: int) -> list[Action]:
+        """465.2.c.3-4: lethal damage goes to one unit at a time, so what a player
+        really chooses is which enemy units die. Offer every set of kills that
+        uses the damage fully (no other enemy unit could also be killed with what
+        is left). Leftover damage lands on a survivor, who heals right after."""
+        bf = self.battlefields[self.showdown]
+        total = sum(max(0, might(o)) for o in bf.units if o.controller == seat)   # 465.2.a-b
+        targets = sorted((o for o in bf.units if o.controller != seat), key=lambda o: o.oid)
+        lethal = {o.oid: max(1, might(o) - o.damage) for o in targets}          # 142.4.b
+        groups: dict[tuple, list[CardInstance]] = {}
+        for obj in targets:
+            groups.setdefault((obj.card.card_id, might(obj), obj.damage), []).append(obj)
+        members = list(groups.values())
+        actions = []
+        for counts in itertools.product(*(range(len(m) + 1) for m in members)):
+            killed = [o for m, n in zip(members, counts) for o in m[:n]]
+            cost = sum(lethal[o.oid] for o in killed)
+            rest = [o for o in targets if o not in killed]
+            if cost > total or any(cost + lethal[o.oid] <= total for o in rest):
+                continue
+            damage = {o.oid: lethal[o.oid] for o in killed}
+            leftover = total - cost
+            if leftover:
+                spill = rest[0] if rest else killed[0]
+                damage[spill.oid] = damage.get(spill.oid, 0) + leftover
+            names = ", ".join(o.card.name for o in killed)
+            label = f"Kill {names}" if killed else "Kill nothing"
+            actions.append(Action(ActionKind.ASSIGN_DAMAGE, f"{label} ({total} damage)",
+                                  damage=tuple(sorted(damage.items()))))
+        return actions
+
+    def _assign_damage(self, seat: int, damage: tuple[tuple[int, int], ...]) -> None:
+        self.assignments[seat] = damage
+        self.assigning.pop(0)
+        if self.assigning:
+            return
+        bf = self.battlefields[self.showdown]
+        units = {o.oid: o for o in bf.units}
+        for assigned in self.assignments.values():                              # 465.2.d: all at once
+            for oid, amount in assigned:
+                units[oid].damage += amount
+        self.assignments = {}
+        self._combat_resolution()
+
+    def _combat_resolution(self) -> None:
+        """466: combat cleanup (kill, heal, recall attackers if defenders remain),
+        then the survivor takes the battlefield."""
+        bf = self.battlefields[self.showdown]
+        attacker = self.attacker
+        for line in self._kill_lethal():                                        # 323.4-323.5
+            self._log(line)
+        for seat in range(len(self.players)):                                   # 466.1.a.1: heal all units
+            for obj in self._on_board(seat):
+                if obj.card.is_unit:
+                    obj.damage = 0
+        if any(o.controller != attacker for o in bf.units):                     # 466.1.a.2: recall attackers
+            for obj in [o for o in bf.units if o.controller == attacker]:
+                self._put(obj, self.players[obj.controller].base)               # 455: not a move
+        present = {o.controller for o in bf.units}
+        self.showdown = self.focus = self.attacker = None
+        self.showdown_passes = 0
+        bf.contested, bf.contested_by = False, None                             # 466.5.a
+        if len(present) == 1:                                                   # 466.5
+            [winner] = present
+            self._log(f"{self.names[winner]} wins the combat at {self._bf_name(bf)}")
+            if bf.controller != winner:
+                bf.controller = winner
+                self._score(winner, bf, conquer=True)                           # 466.5.d
+        elif not present:
+            bf.controller = None                                                # 466.5.b
+            self._log(f"No units are left at {self._bf_name(bf)}")
+        self.priority = self.turn_player if self.turn_phase is TurnPhase.MAIN else None
+
+    def _kill_lethal(self) -> list[str]:
+        """323.5: units with lethal damage die and go to their owner's trash."""
+        lines = []
+        for seat in range(len(self.players)):
+            for obj in self._on_board(seat):
+                if obj.card.is_unit and obj.damage > 0 and obj.damage >= might(obj):
+                    lines.append(f"{obj.card.name} dies")
+                    self.move(obj, self.players[obj.owner].trash)
+        return lines
 
     # --- scoring and winning --------------------------------------------------
 
@@ -612,7 +732,14 @@ class Game:
             self._end(leaders[0])
             return True
 
+        if not self.assigning:
+            for line in self._kill_lethal():                                    # 323.4-323.5
+                self._log(line)
+
         open_state = not self.chain_items
+        if (self.showdown is not None and self.attacker is None and open_state
+                and len({o.controller for o in self.battlefields[self.showdown].units}) > 1):
+            self._begin_combat()                                                # 323.14 / 460.1
         for i, bf in enumerate(self.battlefields):
             present = {o.controller for o in bf.units}
             busy = self.showdown == i
@@ -835,7 +962,7 @@ class Game:
         """A battlefield's name, plus whose it is when both players brought the same one."""
         name = bf.card.card.name
         if sum(b.card.card.name == name for b in self.battlefields) > 1:
-            name += f" ({self.names[bf.card.owner]}'s)"
+            name += f" (brought by {self.names[bf.card.owner]})"
         return name
 
     def _opponent(self, seat: int) -> int:
@@ -866,6 +993,8 @@ class Game:
             "priority": self.priority,
             "focus": self.focus,
             "showdown": self.showdown,
+            "attacker": self.attacker,
+            "assigning": self.assigning[0] if self.assigning else None,
             "phase": self.phase.value,
             "victory_score": VICTORY_SCORE,
             "winner": self.winner,
@@ -873,6 +1002,11 @@ class Game:
             "battlefields": [bf.view(viewer) for bf in self.battlefields],
             "chain": [dict(item.obj.view(), chain_controller=item.controller) for item in self.chain_items],
         }
+
+
+def might(obj: CardInstance) -> int:
+    """A unit's current Might: printed Might plus buffs."""
+    return (obj.card.might or 0) + obj.buffs
 
 
 def _rune_domain(rune: CardInstance) -> str:

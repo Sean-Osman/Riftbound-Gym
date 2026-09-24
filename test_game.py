@@ -616,9 +616,85 @@ def test_units_can_be_played_to_a_battlefield_i_control():
     assert sum(o.card.card_id == "VAN-1" for o in bf.units) == 1 and bf.controller == me
 
 
-def test_units_cannot_move_onto_enemy_units_until_combat_exists():
+# --- combat -------------------------------------------------------------------
+
+def defended(opp_units, my_units):
+    """Opponent controls battlefield 0 with `opp_units`; I have ready `my_units` in base."""
     g, me, opp = quiet_game()
-    ready_unit(g, opp, "VAN-2", g.battlefields[0])
-    g.battlefields[0].controller = opp
-    ready_unit(g, me, "VAN-2")
-    assert moves(g, 0) == [] and moves(g, 1)
+    bf = g.battlefields[0]
+    theirs = [ready_unit(g, opp, cid, bf) for cid in opp_units]
+    bf.controller = opp
+    mine = [ready_unit(g, me, cid) for cid in my_units]
+    to_hand(g, me, "VAN-1")                       # keep me from auto-ending the turn afterwards
+    return g, me, opp, bf, mine, theirs
+
+
+def attack(g, units):
+    oids = {u.oid for u in units}
+    g.step(next(a for a in moves(g, 0) if set(a.units) == oids))
+
+
+def test_attacking_a_defended_battlefield_wins_it_and_conquers():
+    g, me, opp, bf, [mine], [theirs] = defended(["VAN-2"], ["VAN-3"])
+    attack(g, [mine])
+    assert "Combat at " + bf.card.card.name in " ".join(g.log)
+    # neither side had a real choice, so the combat ran to the end on its own
+    assert theirs.zone is g.players[opp].trash
+    assert mine in bf.units.objects and mine.damage == 0          # healed after combat (466.1.a.1)
+    assert bf.controller == me and g.points[me] == 1 and g.showdown is None
+
+
+def test_a_defender_that_survives_keeps_the_battlefield():
+    g, me, opp, bf, [mine], [theirs] = defended(["VAN-4"], ["VAN-2"])
+    attack(g, [mine])
+    assert mine.zone is g.players[me].trash
+    assert theirs in bf.units.objects and theirs.damage == 0
+    assert bf.controller == opp and g.points == [0, 0] and not bf.contested
+
+
+def test_when_both_sides_die_the_battlefield_is_left_uncontrolled():
+    g, me, opp, bf, [mine], [theirs] = defended(["VAN-2"], ["VAN-2"])
+    attack(g, [mine])
+    assert mine.zone is g.players[me].trash and theirs.zone is g.players[opp].trash
+    assert bf.controller is None and g.points == [0, 0]
+
+
+def test_the_attacker_has_focus_in_the_combat_showdown():
+    g, me, opp, bf, [mine], _ = defended(["VAN-2"], ["VAN-3"])
+    to_hand(g, me, "TEST-ACTION")
+    attack(g, [mine])
+    assert g.attacker == me and g.focus == me and g.acting_player == me
+    assert plays(g, "TEST-ACTION")
+
+
+def test_the_attacker_chooses_which_defenders_die():
+    g, me, opp, bf, [mine], theirs = defended(["VAN-2", "VAN-3"], ["VAN-3"])
+    attack(g, [mine])
+    # 3 damage: kill the 2-Might unit (1 left over, not enough for the other) or the 3-Might unit
+    options = g.legal_actions()
+    assert g.acting_player == me
+    kills = sorted(a.label for a in options if a.kind is ActionKind.ASSIGN_DAMAGE)
+    assert kills == ["Kill Vanilla 2 (3 damage)", "Kill Vanilla 3 (3 damage)"]
+
+    g.step(next(a for a in options if a.label.startswith("Kill Vanilla 3")))
+    # the defenders deal 5 back, which kills my unit either way
+    assert theirs[1].zone is g.players[opp].trash and theirs[0] in bf.units.objects
+    assert mine.zone is g.players[me].trash and bf.controller == opp
+
+
+def test_attackers_are_recalled_if_defenders_are_still_there():
+    g, me, opp, bf, [mine], [theirs] = defended(["VAN-6"], ["VAN-2"])
+    g.showdown, g.attacker = 0, me
+    g.move(mine, bf.units)
+    g._combat_resolution()
+    assert mine.zone is g.players[me].base and mine.exhausted is False   # a recall, not a move
+    assert bf.controller == opp
+
+
+def test_damage_assignment_must_be_lethal_before_moving_on():
+    g, me, opp, bf, mine, theirs = defended(["VAN-3", "VAN-3", "VAN-3"], ["VAN-5"])
+    g.showdown, g.attacker = 0, me
+    g.move(mine[0], bf.units)
+    [assign] = g._assignment_options(me)       # identical defenders: a single option
+    # 5 damage into three 3-Might units: exactly one dies, 2 spills onto another (465.2.c.3)
+    assert sorted(n for _, n in assign.damage) == [2, 3]

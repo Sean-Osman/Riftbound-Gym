@@ -10,9 +10,9 @@ against in the browser.
 
 > **Status: early.** Setup and the mulligan, the full turn structure, runes and
 > paying costs, the chain with priority and Reactions, moving units, showdowns
-> with focus, conquering and holding battlefields, and Burn Out are in place.
-> Combat, card abilities and spell effects are not: only units can be played,
-> and until combat exists units can't move onto a battlefield with enemy units.
+> with focus, combat, conquering and holding battlefields, and Burn Out are in
+> place. Card abilities, keywords and spell effects are not, so only units can
+> be played. See [DEVLOG.md](DEVLOG.md) for what changed and the known pitfalls.
 > There is no PPO training code yet.
 
 ## Why
@@ -140,6 +140,7 @@ player owns their own set of zones.
 | `card_data/` | Card JSON loaded by `cards.load_card_pool()` |
 | `decks/` | Decklists: card IDs and counts, looked up in the card pool |
 | `test_*.py` | Tests |
+| `DEVLOG.md` | What changed and known pitfalls; update it with every engine change |
 | `Riftbound-Core-Rules-*.pdf` | The official Core Rules the engine follows |
 
 ## Card data
@@ -186,10 +187,10 @@ To add a deck:
 - [x] Runes, the rune pool and paying costs
 - [x] The chain, priority and Reactions
 - [x] Moving units, showdowns and focus, conquering battlefields
+- [x] Combat
 - [x] Victory at 8 points, Hold scoring and burning out (running out of cards)
 - [x] Browser sim and pluggable agent interface
 - [x] Random legal-move agent
-- [ ] Combat
 - [ ] Damage, death and "this turn" effects
 - [ ] Spell effects, and triggered, activated and static abilities
 - [ ] Keywords (Accelerate, Legion, Deflect, Assault, …)
@@ -213,7 +214,7 @@ To add a deck:
 
 ## Contributing
 
-Work is tracked in GitHub issues. Claim or open an issue before starting, so
+Work is tracked in GitHub issues, and [DEVLOG.md](DEVLOG.md) records changes and known pitfalls. Claim or open an issue before starting, so
 two people don't end up building the same thing. Work on a branch and open a pull
 request against `main`. Please include tests for any change to game logic, and
 cite the Core Rules section a behavior comes from in a comment.
