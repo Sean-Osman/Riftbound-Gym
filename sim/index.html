@@ -68,6 +68,13 @@
           transition: transform .12s ease, box-shadow .12s ease; padding: 0; }
   .card:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
   .card img { width: 100%; height: 100%; object-fit: cover; display: block; position: relative; z-index: 1; }
+  .card .stat { position: absolute; z-index: 2; bottom: 3px; right: 3px; padding: 1px 5px; border-radius: 8px;
+    font-size: 11px; font-weight: 700; background: rgba(0,0,0,.78); color: #fff; }
+  .card .stat.up { color: #7ee07e; } .card .stat.down { color: #ff8c8c; }
+  .card .dmg { position: absolute; z-index: 2; top: 3px; right: 3px; padding: 1px 5px; border-radius: 8px;
+    font-size: 11px; font-weight: 700; background: #b3261e; color: #fff; }
+  .ability { display: inline-block; padding: 6px 10px; margin: 2px; border-radius: 8px; font-size: 12px;
+    background: var(--surface-2); border: 1px solid var(--line); }
   .card .fallback { position: absolute; inset: 0; padding: 6px; font-size: 11px; display: flex;
                     flex-direction: column; justify-content: space-between; text-align: left; }
   .card.exhausted { transform: rotate(8deg); opacity: .8; }
@@ -177,7 +184,11 @@ function cardHtml(c) {
   const cls = "card" + (c.exhausted ? " exhausted" : "");
   const fallback = `<div class="fallback"><b>${esc(c.name)}</b><span>${esc(c.cost ?? "")} ${c.might != null ? c.might + " M" : ""}</span></div>`;
   const img = c.art_url ? `<img src="${esc(c.art_url)}" alt="${esc(c.name)}" loading="lazy" onerror="this.remove()">` : "";
-  return `<button class="${cls}" data-oid="${c.oid}" title="${esc(c.name)}">${fallback}${img}</button>`;
+  const now = state?.observation?.unit_might?.[String(c.oid)];
+  const stat = now == null ? "" :
+    `<span class="stat ${now > c.might ? "up" : now < c.might ? "down" : ""}" title="Current Might">${now} M</span>`;
+  const dmg = c.damage ? `<span class="dmg" title="Damage">${c.damage} dmg</span>` : "";
+  return `<button class="${cls}" data-oid="${c.oid}" title="${esc(c.name)}">${fallback}${img}${stat}${dmg}</button>`;
 }
 
 function zoneHtml(label, zone, extraClass = "") {
@@ -256,14 +267,19 @@ function render() {
   $("opp").innerHTML = playerHtml(opp, obs, false);
   $("you").innerHTML = playerHtml(you, obs, true);
   $("battlefields").innerHTML = obs.battlefields.map((bf) => battlefieldHtml(bf, obs)).join("");
-  $("chain").innerHTML = obs.chain.length ? zoneHtml("Chain (newest last)", {objects: obs.chain}) : "";
+  $("chain").innerHTML = obs.chain.length
+    ? `<div class="zone"><span class="zone-label">Chain (newest last)</span><div class="cards">${
+        obs.chain.map((c) => c.ability
+          ? `<span class="ability">${esc(c.ability)} · ${esc(obs.players[c.chain_controller].name)}</span>`
+          : cardHtml(c)).join("")}</div></div>`
+    : "";
 
   const over = obs.phase === "game_over";
   $("status").textContent = over
     ? `Game over · ${obs.players[obs.winner].name} won`
     : obs.turn_phase === "mulligan"
       ? `Mulligan · ${obs.players[obs.acting_player].name} to choose · seed ${state.seed}`
-      : `Turn ${obs.turn} · ${obs.assigning != null ? "assigning combat damage" : obs.attacker != null ? "combat" : obs.showdown != null ? "showdown" : obs.turn_phase + " phase"} · ${obs.players[obs.acting_player].name} to act · seed ${state.seed}`;
+      : `Turn ${obs.turn} · ${obs.decision != null ? "choosing" : obs.assigning != null ? "assigning combat damage" : obs.attacker != null ? "combat" : obs.showdown != null ? "showdown" : obs.turn_phase + " phase"} · ${obs.players[obs.acting_player].name} to act · seed ${state.seed}`;
 
   $("actions").innerHTML = state.legal_actions.length
     ? state.legal_actions.map((a, i) =>

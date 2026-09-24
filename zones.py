@@ -75,6 +75,9 @@ class CardInstance:
     damage: int = 0
     buffs: int = 0
     facedown: bool = False
+    # "this turn" effects, cleared in the Ending Phase (317.2.c)
+    might_mods: list[tuple[int, int | None]] = field(default_factory=list)   # (amount, minimum)
+    granted: dict[str, int] = field(default_factory=dict)                   # keyword -> value, e.g. Assault 3
 
     def become_new_object(self) -> None:
         """124 / 124.1: new identity, all temporary modifications dropped."""
@@ -84,6 +87,8 @@ class CardInstance:
         self.damage = 0
         self.buffs = 0
         self.facedown = False
+        self.might_mods = []
+        self.granted = {}
 
     def view(self) -> dict[str, Any]:
         """Public face of the object, for observations / the UI."""
@@ -104,6 +109,7 @@ class CardInstance:
             "exhausted": self.exhausted,
             "damage": self.damage,
             "buffs": self.buffs,
+            "granted": dict(self.granted),
         }
 
 

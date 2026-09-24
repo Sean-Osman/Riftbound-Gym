@@ -3,7 +3,7 @@ import pickle
 
 from cards import CardDef, CardType, Cost, Domain, Keyword, make_vanilla_pool, parse_power
 from game import (
-    LEGEND_POWER, SPELL_EFFECTS, ActionKind, Deck, Game, Payment, RandomAgent, TurnPhase,
+    LEGEND_POWER, SPELLS, ActionKind, Deck, Game, Payment, RandomAgent, SpellScript, TurnPhase,
     load_demo_decks, play_game,
 )
 
@@ -26,7 +26,7 @@ CALM_UNIT = CardDef("TEST-CALM-UNIT", "Calm Unit", types=frozenset({CardType.UNI
                     domains=frozenset({Domain.CALM}), cost=Cost(0, parse_power("G")), might=1)
 
 for _card in (SORCERY, REACTION, ACTION, CALM_SPELL):
-    SPELL_EFFECTS[_card.card_id] = lambda game, item: None
+    SPELLS[_card.card_id] = SpellScript(lambda game, item: None)
 LEGEND_POWER["LEG-TEST"] = True          # the test legend gets Kai'Sa's "Add [A] for spells"
 
 
@@ -356,12 +356,9 @@ def test_the_chosen_champion_is_played_from_the_champion_zone():
     assert any(a.card_oid == champion.oid for a in g.legal_actions())
 
 
-def test_real_spells_are_not_playable_until_they_have_effects():
-    g = started()
-    seat = g.acting_player
-    set_runes(g, seat, "RRRRRRBBBBBB")
-    spells = [o for o in g.players[seat].hand if o.card.is_spell]
-    assert not any(a.card_oid in {o.oid for o in spells} for a in g.legal_actions())
+def test_every_card_in_the_kaisa_deck_is_scripted():
+    deck, _ = load_demo_decks()
+    assert all(c.card_id in SPELLS for c in deck.main if c.is_spell)
 
 
 # --- the chain and priority ------------------------------------------------------
@@ -702,3 +699,323 @@ def test_damage_assignment_must_be_lethal_before_moving_on():
     [assign] = g._assignment_options(me)       # identical defenders: a single option
     # 5 damage into three 3-Might units: exactly one dies, 2 spills onto another (465.2.c.3)
     assert sorted(n for _, n in assign.damage) == [2, 3]
+
+
+# --- Kai'Sa deck cards -----------------------------------------------------------
+
+CLEAVE, HEXTECH_RAY, VOID_SEEKER, FALLING_STAR = "OGN-004", "OGN-009", "OGN-024", "OGN-029"
+SMOKE_SCREEN, STUPEFY, RETREAT, TIME_WARP = "OGN-093", "OGN-095", "OGN-104", "OGN-122"
+DARIUS, KAISA, NOXUS, PORO = "OGN-027", "OGN-039", "OGN-012", "OGN-013"
+RAVENBLOOM, WATCHER, SENTRY = "OGN-103", "OGN-116", "OGN-096"
+REAVERS_ROW, STARTIPPED_PEAK, ARENAS_GREATEST = "OGN-285", "OGN-288", "OGN-290"
+
+
+def kaisa_game(my_runes="RRRRBBBB", their_runes=""):
+    """Kai'Sa mirror on my Main Phase: empty hands, chosen runes, plain battlefields."""
+    g = started()
+    me, opp = g.acting_player, 1 - g.acting_player
+    for seat, runes in ((me, my_runes), (opp, their_runes)):
+        clear_hand(g, seat)
+        set_runes(g, seat, runes)
+    for bf in g.battlefields:
+        use_battlefield(g, bf, None)
+    return g, me, opp
+
+
+def use_battlefield(g, bf, card_id):
+    """Swap `bf`'s card for a set-aside battlefield with `card_id` (None: a plain
+    battlefield with no abilities). The old card goes to the set-aside pile."""
+    from zones import CardInstance
+    if card_id is None:
+        new = CardInstance(make_vanilla_pool()["BF-1"], owner=bf.card.owner, controller=bf.card.owner)
+    else:
+        new = next(o for o in g.set_aside if o.card.card_id == card_id)
+        g.set_aside.remove(new)
+    g.set_aside.append(bf.card)
+    bf.card = new
+
+
+def champion(g, seat):
+    return g.players[seat].champion.objects[0]
+
+
+def act(g, prefix):
+    g.step(next(a for a in g.legal_actions() if a.label.startswith(prefix)))
+
+
+def test_hextech_ray_only_targets_units_at_battlefields_and_can_kill():
+    g, me, opp = kaisa_game()
+    in_base = ready_unit(g, opp, NOXUS)
+    at_bf = ready_unit(g, opp, PORO, g.battlefields[0])
+    to_hand(g, me, HEXTECH_RAY)
+    to_hand(g, me, PORO)
+    options = plays(g, HEXTECH_RAY)
+    assert options and all(a.targets == (at_bf.oid,) for a in options)
+    g.step(options[0])
+    assert at_bf.zone is g.players[opp].trash and in_base.zone is g.players[opp].base
+
+
+def test_void_seeker_deals_four_and_draws():
+    g, me, opp = kaisa_game()
+    target = ready_unit(g, opp, NOXUS, g.battlefields[0])
+    to_hand(g, me, VOID_SEEKER)
+    to_hand(g, me, PORO)
+    hand = len(g.players[me].hand)
+    g.step(plays(g, VOID_SEEKER)[0])
+    assert target.zone is g.players[opp].trash
+    assert len(g.players[me].hand) == hand - 1 + 1
+
+
+def test_falling_star_can_hit_one_unit_twice_or_two_units():
+    g, me, opp = kaisa_game("RRRRRR")
+    darius = ready_unit(g, opp, DARIUS, g.battlefields[0])
+    noxus = ready_unit(g, opp, NOXUS)
+    to_hand(g, me, FALLING_STAR)
+    to_hand(g, me, PORO)
+    pairs = {tuple(sorted(a.targets)) for a in plays(g, FALLING_STAR)}
+    assert pairs == {(darius.oid, darius.oid), (darius.oid, noxus.oid), (noxus.oid, noxus.oid)}
+    g.step(next(a for a in plays(g, FALLING_STAR) if a.targets == (darius.oid, darius.oid)))
+    assert darius.zone is g.players[opp].trash and noxus.zone is g.players[opp].base   # 6 damage on Darius
+
+
+def test_smoke_screen_shrinks_to_a_minimum_of_one_until_the_turn_ends():
+    g, me, opp = kaisa_game()
+    darius = ready_unit(g, opp, DARIUS)
+    to_hand(g, me, SMOKE_SCREEN)
+    to_hand(g, me, PORO)
+    g.step(next(a for a in plays(g, SMOKE_SCREEN) if a.targets == (darius.oid,)))
+    assert g.might(darius) == 1
+    assert g.observation(me)["unit_might"][str(darius.oid)] == 1
+    g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.END_TURN))
+    assert g.might(darius) == 5
+
+
+def test_stupefy_gives_minus_one_and_draws():
+    g, me, opp = kaisa_game()
+    noxus = ready_unit(g, opp, NOXUS)
+    poro = ready_unit(g, opp, PORO)
+    to_hand(g, me, STUPEFY)
+    to_hand(g, me, PORO)
+    hand = len(g.players[me].hand)
+    g.step(next(a for a in plays(g, STUPEFY) if a.targets == (noxus.oid,)))
+    assert g.might(noxus) == 3 and g.might(poro) == 2
+    assert len(g.players[me].hand) == hand       # played one, drew one
+
+
+def test_retreat_returns_a_friendly_unit_and_channels_an_exhausted_rune():
+    g, me, opp = kaisa_game()
+    mine = ready_unit(g, me, NOXUS, g.battlefields[0])
+    theirs = ready_unit(g, opp, NOXUS, g.battlefields[1])
+    to_hand(g, me, RETREAT)
+    to_hand(g, me, PORO)
+    options = plays(g, RETREAT)
+    assert {a.targets for a in options} == {(mine.oid,)}      # friendly units only
+    runes = len(g.players[me].runes())
+    g.step(options[0])
+    assert mine.zone is g.players[me].hand and theirs.zone is g.battlefields[1].units
+    assert len(g.players[me].runes()) == runes + 1
+    assert g.players[me].runes()[-1].exhausted
+
+
+def test_a_target_that_leaves_before_resolution_is_skipped():
+    g, me, opp = kaisa_game(their_runes="BB")
+    theirs = ready_unit(g, opp, NOXUS, g.battlefields[0])
+    to_hand(g, me, HEXTECH_RAY)
+    to_hand(g, me, PORO)
+    to_hand(g, opp, RETREAT)
+    g.step(plays(g, HEXTECH_RAY)[0])
+    assert g.acting_player == opp
+    g.step(plays(g, RETREAT)[0])            # save the unit in response
+    assert theirs.zone is g.players[opp].hand
+    assert [line for line in g.log if line.endswith("resolves")][-2:] == ["Retreat resolves", "Hextech Ray resolves"]
+    assert all(u.damage == 0 for u in g.units())
+
+
+def test_cleave_adds_might_only_while_attacking():
+    g, me, opp = kaisa_game()
+    poro = ready_unit(g, me, PORO)
+    defender = ready_unit(g, opp, NOXUS, g.battlefields[0])
+    g.battlefields[0].controller = opp
+    to_hand(g, me, CLEAVE)
+    to_hand(g, me, PORO)
+    g.step(next(a for a in plays(g, CLEAVE) if a.targets == (poro.oid,)))
+    assert g.might(poro) == 2
+    attack(g, [poro])
+    # Pouty Poro attacks with 2 + Assault 3 = 5 and kills the 4-Might Noxus Hopeful
+    assert defender.zone is g.players[opp].trash
+
+
+def test_time_warp_gives_an_extra_turn_and_is_banished():
+    g, me, opp = kaisa_game("RRRRRRBBBBBB")
+    to_hand(g, me, TIME_WARP)
+    to_hand(g, me, PORO)
+    g.step(plays(g, TIME_WARP)[0])
+    warp = next(o for o in g.players[me].banishment if o.card.card_id == TIME_WARP)
+    assert warp and g.extra_turns == [me]
+    turn = g.turn
+    g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.END_TURN))
+    assert g.turn == turn + 1 and g.turn_player == me              # the extra turn
+    clear_hand(g, me)
+    g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.END_TURN))
+    assert g.turn_player == opp                                     # then the normal order resumes
+
+
+def test_deflect_makes_opponents_pay_extra_power_to_target_it():
+    g, me, opp = kaisa_game("RRRR")
+    poro = ready_unit(g, opp, PORO, g.battlefields[0])
+    noxus = ready_unit(g, opp, NOXUS, g.battlefields[1])
+    to_hand(g, me, HEXTECH_RAY)
+    card = next(o.card for o in g.players[me].hand if o.card.card_id == HEXTECH_RAY)
+    assert len(g.total_cost(me, card, deflect=g._deflect(me, [poro])).power) == 2
+    assert len(g.total_cost(me, card, deflect=g._deflect(me, [noxus])).power) == 1
+    at_poro = [a for a in plays(g, HEXTECH_RAY) if a.targets == (poro.oid,)]
+    assert at_poro and all(len(a.payment.recycle) + a.payment.legend == 2 for a in at_poro)
+
+
+def test_accelerate_pays_extra_for_a_unit_that_enters_ready():
+    g, me, opp = kaisa_game("RRRRBB")
+    to_hand(g, me, PORO)
+    fast = [a for a in plays(g, KAISA) if a.accelerate]
+    assert fast and all(len(a.payment.exhaust) == 5 for a in fast)       # [4] + [1] extra
+    g.step(fast[0])
+    played = next(o for o in g.players[me].base if o.card.card_id == KAISA)
+    assert not played.exhausted
+
+
+def test_legion_discount_needs_another_card_played_this_turn():
+    g, me, opp = kaisa_game("RRRRRR")
+    to_hand(g, me, NOXUS)
+    to_hand(g, me, PORO)
+    card = next(o.card for o in g.players[me].hand if o.card.card_id == NOXUS)
+    assert g.total_cost(me, card).energy == 4
+    g.step(plays(g, PORO)[0])
+    assert g.total_cost(me, card).energy == 2
+
+
+def test_darius_grows_and_readies_on_the_second_card():
+    g, me, opp = kaisa_game("RRRRRRBB")
+    darius = ready_unit(g, me, DARIUS)
+    darius.exhausted = True
+    for _ in range(3):
+        to_hand(g, me, PORO)
+    g.step(plays(g, PORO)[0])
+    assert g.might(darius) == 5 and darius.exhausted
+    g.step(plays(g, PORO)[0])
+    assert g.might(darius) == 7 and not darius.exhausted
+
+
+def test_ravenbloom_student_grows_when_i_play_a_spell():
+    g, me, opp = kaisa_game()
+    student = ready_unit(g, me, RAVENBLOOM)
+    target = ready_unit(g, opp, NOXUS)
+    to_hand(g, me, STUPEFY)
+    to_hand(g, me, PORO)
+    g.step(next(a for a in plays(g, STUPEFY) if a.targets == (target.oid,)))
+    assert g.might(student) == 3
+
+
+def test_thousand_tailed_watcher_shrinks_enemy_units():
+    g, me, opp = kaisa_game("RRRRRRBBB")
+    darius = ready_unit(g, opp, DARIUS)
+    poro = ready_unit(g, opp, PORO)
+    mine = ready_unit(g, me, PORO)
+    to_hand(g, me, WATCHER)
+    g.step(plays(g, WATCHER)[0])
+    assert g.might(darius) == 2 and g.might(poro) == 1 and g.might(mine) == 2
+
+
+def test_kaisa_draws_when_she_conquers():
+    g, me, opp = kaisa_game()
+    kaisa = champion(g, me)
+    g.move(kaisa, g.players[me].base)
+    kaisa.exhausted = False
+    to_hand(g, me, PORO)
+    hand = len(g.players[me].hand)
+    attack(g, [kaisa])
+    assert g.battlefields[0].controller == me
+    assert len(g.players[me].hand) == hand + 1
+
+
+def test_watchful_sentry_draws_when_it_dies():
+    g, me, opp = kaisa_game()
+    ready_unit(g, opp, SENTRY, g.battlefields[0])
+    g.battlefields[0].controller = opp
+    darius = ready_unit(g, me, DARIUS)
+    to_hand(g, me, PORO)
+    hand = len(g.players[opp].hand)
+    attack(g, [darius])
+    assert len(g.players[opp].hand) == hand + 1
+
+
+def test_the_arenas_greatest_gives_a_point_on_each_players_first_beginning_phase():
+    for seed in range(50):
+        g = new_game(seed)
+        arenas = sum(bf.card.card.card_id == ARENAS_GREATEST for bf in g.battlefields)
+        if arenas:
+            break
+    keep_hands(g)
+    first = g.first_player
+    assert g.points[first] == arenas
+    g.players[first].rune_pool.energy = 0
+    clear_hand(g, first)
+    g.step(next(a for a in g.legal_actions() if a.kind is ActionKind.END_TURN))
+    while g.turn_player != first or g.turn_phase is not TurnPhase.MAIN:     # back to my next turn
+        g.step(next((a for a in g.legal_actions() if a.kind in (ActionKind.END_TURN, ActionKind.PASS,
+                                                                 ActionKind.CHOOSE)), g.legal_actions()[0]))
+    assert sum(line.startswith("Triggers: The Arena's Greatest") for line in g.log) == 2 * arenas
+
+
+def test_startipped_peak_may_channel_a_rune_when_held():
+    g, me, opp = kaisa_game()
+    bf = g.battlefields[0]
+    use_battlefield(g, bf, STARTIPPED_PEAK)
+    ready_unit(g, me, PORO, bf)
+    bf.controller = me
+    g._score(me, bf, conquer=False)
+    g._settle()
+    assert g.decision is not None and g.acting_player == me
+    runes = len(g.players[me].runes())
+    g.step(next(a for a in g.legal_actions() if a.label == "Channel 1 rune exhausted"))
+    assert len(g.players[me].runes()) == runes + 1
+
+
+def test_reavers_row_lets_the_defender_pull_a_unit_back():
+    g, me, opp = kaisa_game()
+    bf = g.battlefields[0]
+    use_battlefield(g, bf, REAVERS_ROW)
+    theirs = ready_unit(g, opp, NOXUS, bf)
+    bf.controller = opp
+    mine = ready_unit(g, me, DARIUS)
+    to_hand(g, me, PORO)
+    attack(g, [mine])
+    assert g.decision is not None and g.acting_player == opp
+    g.step(next(a for a in g.legal_actions() if a.label.startswith("Move Noxus Hopeful")))
+    assert theirs.zone is g.players[opp].base
+    assert bf.controller == me                     # no defenders left, so I conquer
+
+
+def test_focus_stays_put_after_a_triggered_ability_resolves():
+    g, me, opp = kaisa_game()
+    bf = g.battlefields[0]
+    use_battlefield(g, bf, REAVERS_ROW)
+    ready_unit(g, opp, NOXUS, bf)
+    ready_unit(g, opp, PORO, bf)
+    bf.controller = opp
+    mine = ready_unit(g, me, DARIUS)
+    to_hand(g, me, HEXTECH_RAY)
+    attack(g, [mine])
+    g.step(next(a for a in g.legal_actions() if a.label.startswith("Move Pouty Poro")))
+    # the Reaver's Row trigger resolved; the attacker keeps focus (346.1)
+    assert g.showdown == 0 and g.focus == me and g.acting_player == me
+
+
+def test_the_turn_player_chooses_between_staged_showdowns():
+    g, me, opp = kaisa_game()
+    for bf in g.battlefields:
+        ready_unit(g, me, PORO, bf)
+        bf.contested, bf.contested_by = True, me
+    g._settle()
+    assert g.decision is not None and g.decision.kind == "showdown"
+    assert len(g.legal_actions()) == 2
+    act(g, "Start at")
+    assert all(bf.controller == me for bf in g.battlefields)     # both resolve in turn

@@ -3,7 +3,7 @@
 A rules-accurate simulator for the Riftbound TCG, built as an RL environment. The end goal is to
 train PPO agents to pilot meta decks, measure matchup win rates between decks, and serve the agents
 as practice opponents in the browser sim. See README.md for the roadmap. The rules engine is still
-incomplete: there are no card abilities, keywords or spell effects yet, so only units can be played.
+incomplete: only the cards in the Kai'Sa deck are scripted (see DEVLOG.md for known gaps).
 
 ## Commands
 
@@ -30,8 +30,13 @@ python3 sim.py [--agent mod:Cls]  # browser sim on :8765 (also the "riftbound-si
     deep-copyable and picklable (used for search/rollouts).
 - `step` runs everything that needs no decision, including passing priority or ending the turn
   when that is a player's only option, so `acting_player` always faces a real choice.
-- Spells are only playable once their card_id has an entry in `SPELL_EFFECTS`; unimplemented
-  cards must stay unplayable rather than resolve with no effect. Tests register dummy cards there.
+- `scripts.py` says what each card does (`SPELLS`, `TRIGGERS`, `LEGEND_POWER`, `LEGION_DISCOUNT`);
+  scripts only call Game's public helpers (`targets`, `deal`, `add_might`, `grant`, `draw`,
+  `channel`, `move_unit`, ...). A spell without an entry is unplayable, and that must stay the
+  case for unimplemented cards rather than resolving with no effect. Tests register dummy cards
+  there under test-only ids.
+- Game state stays plain data so it can be pickled: chain items point at trigger scripts by
+  `(card_id, index)`, never by function.
 - Legal actions are deduplicated: copies of a card in the same zone give one action, and payment
   options (`Game.payment_options`) differ only in what they leave behind (ready runes, recycled
   domains, legend use). Moves group interchangeable units the same way. Keep it that way; every extra action makes PPO's job harder.

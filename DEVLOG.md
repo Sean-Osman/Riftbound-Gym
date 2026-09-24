@@ -11,27 +11,34 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 ## Known pitfalls
 
 ### Rules that are simplified or missing
-- **No card abilities yet.** Triggered, activated and static abilities are missing,
-  and so are Deathknell (Watchful Sentry), battlefield abilities (*The Arena's Greatest*,
-  *Startipped Peak*, *Reaver's Row*) and the champion/unit triggers (Darius,
-  Ravenbloom Student, Kai'Sa conquer draw, Thousand-Tailed Watcher).
-- **No spell effects.** Spells are unplayable until they have an entry in
-  `SPELL_EFFECTS`, so the real deck plays units only. Every Action/Reaction in the
-  Kai'Sa deck is a spell, so showdowns in real games always auto-resolve.
-- **No keywords.** Accelerate, Legion, Deflect, Assault, Tank, Backline and Shield
-  are not implemented. `CardDef.keywords` records them but nothing reads them
-  except `REACTION` / `ACTION` for timing.
-- **No "this turn" effects.** There is nowhere to store temporary Might changes or
-  granted keywords, so the Ending Phase only heals units and empties rune pools.
+- **Only the Kai'Sa deck is scripted.** `scripts.py` covers exactly the cards in
+  `decks/kaisa.json`. Any other spell is unplayable and any other unit has no
+  abilities. Keywords outside the deck (Tank, Backline, Shield, Hidden, Ganking, ...)
+  are not implemented.
+- **Order of simultaneous triggers (383.3.d).** The controller should choose the
+  order. The engine puts the turn player's triggers first (as the rules say) but
+  orders each player's own triggers by board position. Only matters with several
+  simultaneous triggers, e.g. two Ravenbloom Students.
+- **Triggers during combat resolve after the combat ends.** Rules 466.2/466.4 resolve
+  them before the result is decided and before control is established. Today's
+  triggers there (Deathknell draw, Kai'Sa's conquer draw) don't change the result,
+  but a trigger that moves or kills units would.
+- **Assault designation timing.** Units count as attackers the moment they are at the
+  battlefield under the attacker's control. A unit arriving mid-combat should only
+  get the designation at the next cleanup (464.2.c.3.a). Nothing in the deck can
+  bring a unit into a combat yet.
+- **"To a minimum of N"** is applied when Might is calculated: a reduction can't take
+  Might below N, and never raises a unit that is already lower. Effects are
+  applied in the order they were created; there are no layers (473) yet.
+- **Additional costs are hard-coded.** Accelerate is always `[1][C]` (805.1.a),
+  Deflect is `[A]` per time chosen (so Falling Star on the same Pouty Poro twice
+  costs 2), and Legion is a flat Energy discount from `LEGION_DISCOUNT`.
+- **Both players can bring *The Arena's Greatest*.** Each copy triggers, so with two in
+  play each player gains 2 points on their first Beginning Phase. That follows the
+  card text, but it's a big swing worth knowing about.
 - **Burn Out interpretation (431.3).** If the trash is also empty,
   drawing from an empty deck burns out once per card and draws nothing. The rule
   could be read as burning out repeatedly. This is a judgment call.
-- **Multiple staged showdowns (323.12 / 461.1).** The turn player should choose
-  which showdown or combat to start. The engine starts the lowest-index battlefield.
-  This can't come up yet, because one move can only stage one showdown.
-- **Focus after a chain (346.1).** Focus should *not* pass when the chain was
-  started by a triggered or Add ability. There are no triggers yet, so the
-  exception isn't implemented.
 - **Recall of attackers (466.1.a.2).** Attackers are recalled only if defenders
   survive. With plain Might combat that can't happen (whichever side has less total
   Might loses all its units), so it is only reachable once damage prevention exists.
@@ -53,21 +60,27 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   - An agent never sees these forced steps, so it can't count on getting a decision
     at every priority window.
 - **Action deduplication.** Copies of a card in the same zone produce one action, and
-  so do interchangeable units in moves and damage assignment. Payment options are
+  so do interchangeable units (same card, place and state, see `_state_key`) in moves,
+  targets and damage assignment. Payment options are
   merged when they leave the same result (number of ready runes, recycled domains,
   legend use). This relies on two facts: Energy has no domain, and exhausted runes
   can still be recycled. An effect that cares *which* runes are ready (for example
   "ready a Fury rune") would break that assumption.
-- **Combinatorial action counts.** Group moves and damage assignment enumerate
-  subsets of units. That is fine for the Kai'Sa mirror, but a wide board could produce
-  hundreds of actions. For PPO it's worth switching to step-by-step selection (pick
-  units one at a time, then confirm).
+- **Combinatorial action counts.** Group moves, damage assignment and spell targets
+  multiply with payment options. The most seen in 100 random Kai'Sa games was 168
+  actions at once; a wide board could produce many more. For PPO, switch to
+  step-by-step selection (pick the card, then targets, then payment).
+- **Speed.** Enumerating every action is now the main cost: 200 random games take
+  about 12 s (about 3 s before targets and triggers). Profile before RL training.
 - **Object ids** come from a process-wide counter and change whenever a card moves to
   or from a non-board zone (rule 124). Don't store oids across games or use them to
   replay a game. Replay from the seed plus the list of chosen action *indices*.
-- **Card-script registries are global.** `SPELL_EFFECTS` and `LEGEND_POWER` are module
-  dicts keyed by card id. `test_game.py` registers test-only ids in them at import
-  time. That's harmless now, but tests must never register a real card id.
+- **Card-script registries are global.** `SPELLS`, `TRIGGERS`, `LEGEND_POWER` and
+  `LEGION_DISCOUNT` in `scripts.py` are module dicts keyed by card id. `test_game.py`
+  registers test-only ids in them at import time. That's harmless now, but tests
+  must never register a real card id. Chain items refer to trigger scripts by
+  `(card_id, index)`, never by function, so reordering a card's triggers changes
+  what pickled games point at.
 - **The log is public.** The sim shows `Game.log` to both players, so it must never
   contain hidden information (it logs how many cards were mulliganed, not which).
 - **Pickling / deep copy.** `Game` has to stay plain data (no generators, lambdas or
@@ -81,12 +94,48 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 - **Card data** comes from `import_sheet.py`. The sheet has one domain column, so
   dual-domain cards need `OVERRIDES`. Only the Kai'Sa deck's cards are in
   `card_data/`.
+- **Test battlefields.** `kaisa_game()` in the tests swaps in plain battlefields
+  (a vanilla `BF-1` card) so battlefield abilities don't interfere. Use
+  `use_battlefield()` to put a specific one back.
 - **pytest isn't a declared dependency** (there is no requirements file). Install
   it with `pip install pytest`.
 - **The sim server** keeps a single game in memory. Restarting it loses the game in
   progress.
 
 ---
+
+## 2026-09-23: Every Kai'Sa card, triggers, keywords and extra turns
+
+- **`scripts.py`** holds what each card does: `SPELLS` (effects and targets),
+  `TRIGGERS` (triggered abilities), `LEGEND_POWER` and `LEGION_DISCOUNT`. Every card in
+  `decks/kaisa.json` is scripted.
+- **Targets (355.5-355.10):** spells pick their targets as they're played (a
+  `targets` tuple on the action). Targets are checked again on resolution, and a target
+  that left the board, or no longer qualifies, is skipped (359.3.e). A spell with no
+  legal target can't be played (355.8).
+- **Spells:** Hextech Ray, Void Seeker, Falling Star (two targets, possibly the same
+  unit), Smoke Screen, Stupefy, Cleave, Retreat, and Time Warp (an extra turn, then the
+  card is banished).
+- **"This turn" effects:** Might changes (with "to a minimum of N") and granted
+  keywords live on the unit and expire in the Ending Phase (317.2.c). `Game.might()`
+  gives current Might.
+- **Triggered abilities (382-383):** events (`played`, `conquer`, `hold`, `defend`,
+  `dies`, `beginning`) queue abilities, which go on the chain with priority like
+  spells. "You may" abilities ask their controller first with a new `CHOOSE` action.
+  Focus doesn't pass when a trigger started the chain (346.1). Scripted: Darius,
+  Ravenbloom Student, Thousand-Tailed Watcher, Kai'Sa's conquer draw, Watchful
+  Sentry's Deathknell, *The Arena's Greatest*, *Startipped Peak* and *Reaver's Row*.
+- **Keywords:** Accelerate (an optional `[1][C]` to enter ready), Legion (Noxus Hopeful
+  costs 2 less), Deflect (`[A]` more to target), Assault (+Might while attacking).
+- **The start of the turn is resumable:** each step waits for its chain to resolve
+  (335), so Beginning Phase and Hold triggers can be responded to.
+- **Additional turns (734-738)** are queued, and the regular turn order resumes
+  afterwards.
+- **Loose ends fixed:** the turn player now chooses which staged showdown starts
+  (323.12 / 461.1). The sim shows current Might (green/red when changed), damage,
+  abilities on the chain, targets in action labels, and pending choices.
+- Tests for every card and mechanic above (77 tests). Games pickle and deep-copy
+  mid-chain, mid-choice and mid-damage-assignment.
 
 ## 2026-09-23: Concede is off by default
 

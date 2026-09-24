@@ -8,12 +8,11 @@ against each other to measure which matchups are favored and which are not. As
 a side effect, the trained agents double as practice opponents you can play
 against in the browser.
 
-> **Status: early.** Setup and the mulligan, the full turn structure, runes and
-> paying costs, the chain with priority and Reactions, moving units, showdowns
-> with focus, combat, conquering and holding battlefields, and Burn Out are in
-> place. Card abilities, keywords and spell effects are not, so only units can
-> be played. See [DEVLOG.md](DEVLOG.md) for what changed and the known pitfalls.
-> There is no PPO training code yet.
+> **Status: early.** The Kai'Sa mirror plays under the real rules: the turn
+> structure, runes and costs, the chain with Reactions, triggered abilities,
+> showdowns and focus, combat, scoring, and every card in the deck. Other decks'
+> cards aren't scripted yet. See [DEVLOG.md](DEVLOG.md) for what changed and the
+> known pitfalls. There is no PPO training code yet.
 
 ## Why
 
@@ -134,6 +133,7 @@ player owns their own set of zones.
 | --- | --- |
 | `cards.py` | Static card definitions (`CardDef`), costs, domains, keywords, deck-legality checks |
 | `zones.py` | Per-game object state (`CardInstance`), zones, battlefields, rune pool, visibility |
+| `scripts.py` | What each card does: spell effects and targets, triggered abilities, keyword costs |
 | `game.py` | `Deck`, `Game` (setup, turn structure, decision loop), `Action`, `Agent`, `RandomAgent` |
 | `sim.py` + `sim/index.html` | Local web UI for playing against an agent |
 | `import_sheet.py` | Converts a tab of the card spreadsheet (`.xlsx`) into card JSON |
@@ -181,7 +181,7 @@ To add a deck:
 
 ## Roadmap
 
-**Phase 1: Rules engine** (in progress)
+**Phase 1: Rules engine** (done for the Kai'Sa mirror)
 - [x] Card model, deck legality, zones, visibility
 - [x] Setup, mulligan and the phases of the turn
 - [x] Runes, the rune pool and paying costs
@@ -191,10 +191,10 @@ To add a deck:
 - [x] Victory at 8 points, Hold scoring and burning out (running out of cards)
 - [x] Browser sim and pluggable agent interface
 - [x] Random legal-move agent
-- [ ] Damage, death and "this turn" effects
-- [ ] Spell effects, and triggered, activated and static abilities
-- [ ] Keywords (Accelerate, Legion, Deflect, Assault, …)
-- [ ] Kai'Sa mirror fully playable under the real rules
+- [x] Damage, death and "this turn" effects
+- [x] Spell effects with targets, triggered abilities, extra turns
+- [x] Keywords in the Kai'Sa deck (Accelerate, Legion, Deflect, Assault, Deathknell)
+- [x] Kai'Sa mirror fully playable under the real rules
 
 **Phase 2: Training**
 - [ ] Gymnasium-style environment wrapper with observation encoding and action masks

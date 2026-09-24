@@ -1,20 +1,22 @@
-"""Game engine: decks, setup, the turn, paying costs, the chain and agents.
+"""Game engine: decks, setup, the turn, paying costs, the chain, combat and agents.
 
-Implemented: setup with the mulligan (110-118), the phases of the turn (314-317),
-runes and rune pools (160-168), paying costs (356-357), playing cards onto the
-chain with priority (327-340, 349-359), Standard Moves (144), battlefield
-control, showdowns with focus (190, 341-348), combat (459-466), cleanups
-(323), scoring (467-471) and Burn Out (431).
+Implemented: setup with the mulligan (110-118), the phases of the turn and extra
+turns (314-317, 734-738), runes and rune pools (160-168), paying costs with
+Accelerate, Legion and Deflect (356-357, 805, 809, 812), playing cards and
+triggered abilities on the chain with priority (327-340, 349-359, 382-383),
+targets (355.5-355.10, 359.3.e), "this turn" effects, Standard Moves (144),
+battlefield control, showdowns and focus (190, 341-348), combat with Assault
+(459-466, 807), cleanups (323), Deathknell (808), scoring (467-471) and Burn
+Out (431).
 
-Not yet: triggered and activated abilities, "this turn" effects, keywords
-(Assault, Tank, Deflect, ...), and spell effects. A spell can only be played
-once it has an entry in SPELL_EFFECTS, so for now the real decks only play units.
+What each card does lives in scripts.py. Every card in decks/kaisa.json is
+scripted; any other spell is unplayable and any other unit has no abilities.
 
 The decision loop is `acting_player` / `legal_actions` / `step` / `observation`.
 Everything that needs no decision runs inside `step`, and when a player's only
-option is to pass priority or end their turn, the engine does it for them.
-Game state is plain data (no generators or callbacks), so games deep-copy and
-pickle.
+option is to pass, end their turn, or make a forced choice, the engine does it
+for them. Game state is plain data (no generators or callbacks; chain items
+point at scripts by key), so games deep-copy and pickle.
 
     python3 game.py            # headless: random agent vs random agent
 """
@@ -27,9 +29,13 @@ import random
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
-from cards import CardDef, Domain, Keyword, deck_errors, load_card_pool
+from cards import CardDef, Cost, Domain, Keyword, Pip, deck_errors, load_card_pool
+from scripts import (
+    FRIENDLY_UNIT, LEGEND_POWER, LEGION_DISCOUNT, SPELLS, TRIGGERS, UNIT_AT_BATTLEFIELD,
+    SpellScript, TriggerScript,
+)
 from zones import Battlefield, CardInstance, PlayerZones, Power, Zone, ZoneKind
 
 ROOT = Path(__file__).parent
@@ -38,22 +44,6 @@ OPENING_HAND = 4           # 116
 MULLIGAN_MAX = 2           # 117.1
 CHANNEL_PER_TURN = 2       # 315.3.b
 SECOND_PLAYER_EXTRA = 1    # 485.7: extra rune on the second player's first Channel Phase
-
-
-# ---------------------------------------------------------------------------
-# Card scripts
-# ---------------------------------------------------------------------------
-
-# card_id -> what the spell does when it resolves (359.3.d). The effects system
-# will fill this in; until then only spells registered here can be played.
-SpellEffect = Callable[["Game", "ChainItem"], None]
-SPELL_EFFECTS: dict[str, SpellEffect] = {}
-
-# Legends with "[E]: [Reaction] — Add [A]" that can help pay costs. The value is
-# whether that Power can only be used to play spells.
-LEGEND_POWER: dict[str, bool] = {
-    "OGN-247": True,       # Kai'Sa, Daughter of the Void
-}
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +131,7 @@ class ActionKind(Enum):
     PLAY_CARD = "play_card"    # 349
     MOVE = "move"              # 144: Standard Move
     ASSIGN_DAMAGE = "assign_damage"   # 465.2.c: combat damage assignment
+    CHOOSE = "choose"          # a "you may" trigger (383.3.a) or which showdown starts (323.12)
     PASS = "pass"              # 338.1.b / 347.2: pass priority on a chain, or focus in a showdown
     END_TURN = "end_turn"      # 316.9
     CONCEDE = "concede"        # 650
@@ -169,6 +160,9 @@ class Action:
     units: tuple[int, ...] = ()         # MOVE: the units moving together (144.3)
     destination: int | None = None      # PLAY_CARD / MOVE: battlefield index, None for base
     damage: tuple[tuple[int, int], ...] = ()   # ASSIGN_DAMAGE: (unit oid, amount) pairs
+    targets: tuple[int, ...] = ()       # PLAY_CARD: chosen targets, in the spell's order (355.5)
+    accelerate: bool = False            # PLAY_CARD: pay Accelerate (805)
+    choice: int | None = None           # CHOOSE: index into the offered options
 
     def to_json(self) -> dict[str, Any]:
         result: dict[str, Any] = {"kind": self.kind.value, "label": self.label}
@@ -182,8 +176,13 @@ class Action:
             result["units"] = list(self.units)
         if self.kind in (ActionKind.MOVE, ActionKind.PLAY_CARD):
             result["destination"] = self.destination
+        if self.kind is ActionKind.PLAY_CARD:
+            result["targets"] = list(self.targets)
+            result["accelerate"] = self.accelerate
         if self.kind is ActionKind.ASSIGN_DAMAGE:
             result["damage"] = [list(pair) for pair in self.damage]
+        if self.kind is ActionKind.CHOOSE:
+            result["choice"] = self.choice
         return result
 
 
@@ -218,18 +217,40 @@ class Phase(Enum):
 class TurnPhase(Enum):
     MULLIGAN = "mulligan"      # 117, before the first turn
     AWAKEN = "awaken"          # 315.1
-    BEGINNING = "beginning"    # 315.2
+    BEGINNING = "beginning"    # 315.2.a: Beginning Step
+    SCORING = "scoring"        # 315.2.b: Scoring Step
     CHANNEL = "channel"        # 315.3
     DRAW = "draw"              # 315.4
     MAIN = "main"              # 316
     ENDING = "ending"          # 317
 
 
+START_OF_TURN = (TurnPhase.AWAKEN, TurnPhase.BEGINNING, TurnPhase.SCORING,
+                 TurnPhase.CHANNEL, TurnPhase.DRAW)
+
+
 @dataclass(eq=False)
 class ChainItem:
-    """329: something on the chain. Only cards for now; abilities join later."""
-    obj: CardInstance
+    """329: a card being played or a triggered ability, on the chain or waiting to
+    be put there. Abilities point at their script by key so the state stays
+    plain data."""
     controller: int
+    obj: CardInstance | None = None                 # the card, for spells
+    trigger: tuple[str, int] | None = None          # (card_id, index) into scripts.TRIGGERS
+    source: CardInstance | None = None              # the ability's source
+    source_oid: int | None = None
+    targets: list[tuple[CardInstance, int, str]] = field(default_factory=list)   # (object, oid, kind)
+    data: dict[str, Any] = field(default_factory=dict)
+    label: str = ""
+
+
+@dataclass(eq=False)
+class Decision:
+    """A choice made outside of priority."""
+    seat: int
+    kind: str                           # "trigger" or "showdown"
+    options: list[tuple[str, Any]]      # (label, value)
+    item: ChainItem | None = None
 
 
 class Game:
@@ -240,19 +261,25 @@ class Game:
         and skew matchup win rates. The browser sim turns it on for humans."""
         if len(decks) != 2:
             raise ValueError("only 1v1 Duel (485) is supported")
+        n = len(decks)
         self.rng = random.Random(seed)
         self.seed = seed
         self.allow_concede = allow_concede
-        self.names = names or [f"Player {i + 1}" for i in range(len(decks))]
+        self.names = names or [f"Player {i + 1}" for i in range(n)]
         self.decks = decks
-        self.players = [PlayerZones(i) for i in range(len(decks))]
-        self.points = [0] * len(decks)
+        self.players = [PlayerZones(i) for i in range(n)]
+        self.points = [0] * n
         self.battlefields: list[Battlefield] = []
         self.set_aside: list[CardInstance] = []           # unused battlefields (485.5)
-        self.chain = Zone(ZoneKind.CHAIN, None)
-        self.chain_items: list[ChainItem] = []            # parallel to self.chain.objects
+        self.chain = Zone(ZoneKind.CHAIN, None)           # holds the cards on the chain
+        self.chain_items: list[ChainItem] = []            # everything on the chain, oldest first
+        self.chain_by_trigger = False                     # the chain was started by a trigger (346.1)
+        self.pending: list[ChainItem] = []                # triggered abilities not yet on the chain
+        self.decision: Decision | None = None
         self.turn = 0
         self.turn_player = 0
+        self.regular_player = 0                           # whose regular turn was last (737)
+        self.extra_turns: list[int] = []                  # additional turns queued (735)
         self.turn_phase = TurnPhase.MULLIGAN
         self.first_player = 0
         self.phase = Phase.PLAYING
@@ -266,7 +293,9 @@ class Game:
         self.assignments: dict[int, tuple[tuple[int, int], ...]] = {}
         self.passes = 0                                   # consecutive passes on the chain (339.1)
         self.mulligan_queue: list[int] = []
-        self.channel_phases = [0] * len(decks)            # for 485.7
+        self.channel_phases = [0] * n                     # for 485.7
+        self.beginning_phases = [0] * n                   # for "first Beginning Phase" effects
+        self.cards_played = [0] * n                       # this turn, for Legion and "second card"
         self.scored: set[tuple[int, int]] = set()         # (seat, battlefield oid) scored this turn (470)
         self.log: list[str] = []
         self._setup()
@@ -345,12 +374,79 @@ class Game:
         for obj in objs:
             self.move(obj, self.players[obj.owner].main_deck, bottom=True)
 
-    def _channel(self, seat: int, n: int, *, exhausted: bool = False) -> None:
+    def channel(self, seat: int, n: int, *, exhausted: bool = False) -> None:
         """430: put the top n runes of the Rune Deck into the base."""
         zones = self.players[seat]
         for rune in zones.rune_deck.top(n):                                     # 430.3
             self.move(rune, zones.base)
             rune.exhausted = exhausted                                          # 430.2.a
+
+    # --- helpers for card scripts ---------------------------------------------
+
+    def units(self) -> list[CardInstance]:
+        """Every unit on the board."""
+        objs = [o for p in self.players for o in p.base if o.card.is_unit]
+        return objs + [o for bf in self.battlefields for o in bf.units]
+
+    def might(self, obj: CardInstance) -> int:
+        """A unit's current Might: printed Might, buffs, "this turn" changes, and
+        Assault while it's an attacker (807)."""
+        value = (obj.card.might or 0) + obj.buffs
+        for amount, minimum in obj.might_mods:
+            new = value + amount
+            if minimum is not None:
+                new = max(new, min(value, minimum))     # "to a minimum of N" never raises Might
+            value = new
+        if self._is_attacker(obj):
+            value += obj.card.keyword_value(Keyword.ASSAULT) + obj.granted.get("Assault", 0)
+        return value
+
+    def add_might(self, obj: CardInstance, amount: int, *, floor: int | None = None) -> None:
+        """Give a unit +/-X Might this turn (optionally "to a minimum of `floor`")."""
+        obj.might_mods.append((amount, floor))
+
+    def grant(self, obj: CardInstance, keyword: str, value: int) -> None:
+        """Give a unit a valued keyword this turn; values add up (807.2, 809.2)."""
+        obj.granted[keyword] = obj.granted.get(keyword, 0) + value
+
+    def deal(self, obj: CardInstance, amount: int) -> None:
+        """417: mark damage. Death happens in the next cleanup."""
+        if amount > 0:
+            obj.damage += amount
+
+    def return_to_hand(self, obj: CardInstance) -> None:
+        self.move(obj, self.players[obj.owner].hand)
+
+    def move_unit(self, obj: CardInstance, dest: int | None) -> None:
+        """A move caused by an effect (449): no exhaust cost, unlike a Standard Move."""
+        if dest is None:
+            self.move(obj, self.players[obj.controller].base)
+            return
+        bf = self.battlefields[dest]
+        if not bf.contested and bf.controller != obj.controller:               # 450
+            bf.contested, bf.contested_by = True, obj.controller
+        self.move(obj, bf.units)
+
+    def gain_points(self, seat: int, n: int) -> None:
+        self.points[seat] += n
+        self._log(f"{self.names[seat]} gains {n} point(s): {self.points[seat]} points")
+
+    def add_extra_turn(self, seat: int) -> None:
+        self.extra_turns.append(seat)                                           # 735
+        self._log(f"{self.names[seat]} will take an extra turn")
+
+    def targets(self, item: ChainItem) -> list[CardInstance]:
+        """The item's targets that are still legal (359.3.e); a unit chosen twice
+        appears twice."""
+        return [obj for obj, oid, kind in item.targets
+                if obj.oid == oid and self._valid_target(obj, kind, item.controller)]
+
+    def source(self, item: ChainItem) -> CardInstance | None:
+        """An ability's source, if it is still the same object on the board."""
+        src = item.source
+        if src is None or src.oid != item.source_oid or src.zone is None or not src.zone.is_board:
+            return None
+        return src
 
     # --- decision loop --------------------------------------------------------
 
@@ -365,6 +461,8 @@ class Game:
             return None
         if self.turn_phase is TurnPhase.MULLIGAN:
             return self.mulligan_queue[0]
+        if self.decision is not None:
+            return self.decision.seat
         if self.assigning:
             return self.assigning[0]
         return self.priority
@@ -375,6 +473,9 @@ class Game:
             return []
         if self.turn_phase is TurnPhase.MULLIGAN:
             actions = self._mulligan_options(seat)
+        elif self.decision is not None:
+            actions = [Action(ActionKind.CHOOSE, label, choice=i)
+                       for i, (label, _) in enumerate(self.decision.options)]
         elif self.assigning:
             actions = self._assignment_options(seat)
         else:
@@ -395,6 +496,7 @@ class Game:
         if action not in self.legal_actions(seat):
             raise ValueError(f"illegal action {action} for seat {seat}")
         self._apply(seat, action)
+        self._settle()
         self._advance()
 
     def _apply(self, seat: int, action: Action) -> None:
@@ -403,6 +505,8 @@ class Game:
             self._end(winner=self._opponent(seat))
         elif action.kind is ActionKind.MULLIGAN:
             self._mulligan(seat, action.set_aside)
+        elif action.kind is ActionKind.CHOOSE:
+            self._choose(action.choice)
         elif action.kind is ActionKind.PLAY_CARD:
             self._play_card(seat, action)
         elif action.kind is ActionKind.MOVE:
@@ -416,19 +520,84 @@ class Game:
                 self._pass_focus(seat)
         elif action.kind is ActionKind.END_TURN:
             self._end_turn()
-        self._cleanup()
+
+    def _settle(self) -> None:
+        """Everything that happens between decisions: cleanups (319), putting
+        triggered abilities on the chain, and the start-of-turn phases."""
+        while not self.is_over:
+            self._cleanup()
+            if self.is_over or self.decision is not None or self.assigning:
+                return
+            if self.pending:
+                self._flush_triggers()
+                continue
+            if not self.chain_items and self.turn_phase in START_OF_TURN:       # 335
+                self._next_start_step()
+                continue
+            return
 
     def _advance(self) -> None:
         """Take every action that isn't a real choice: when passing, ending the turn
-        or a forced damage assignment is all a player can do (conceding aside), do
-        it for them."""
-        automatic = (ActionKind.PASS, ActionKind.END_TURN, ActionKind.ASSIGN_DAMAGE)
+        or a forced choice is all a player can do (conceding aside), do it."""
+        automatic = (ActionKind.PASS, ActionKind.END_TURN, ActionKind.ASSIGN_DAMAGE, ActionKind.CHOOSE)
         while not self.is_over:
             seat = self.acting_player
             options = [a for a in self.legal_actions(seat) if a.kind is not ActionKind.CONCEDE]
             if len(options) != 1 or options[0].kind not in automatic:
                 return
             self._apply(seat, options[0])
+            self._settle()
+
+    # --- triggered abilities (382-383) ----------------------------------------
+
+    def _emit(self, event: str, **data: Any) -> None:
+        """Queue every triggered ability whose condition `event` meets. The turn
+        player's abilities go on the chain first (383.3.d.1)."""
+        sources = [o for seat in self._turn_order() for o in self._on_board(seat)]
+        sources += [bf.card for bf in self.battlefields]
+        found = []
+        for source in sources:
+            for i, script in enumerate(TRIGGERS.get(source.card.card_id, ())):
+                if script.event != event or not script.condition(self, source, data):
+                    continue
+                controller = data["seat"] if source.card.is_battlefield else source.controller
+                found.append(ChainItem(controller, trigger=(source.card.card_id, i), source=source,
+                                       source_oid=source.oid, data=dict(data),
+                                       label=f"{source.card.name}: {script.text}"))
+        order = self._turn_order()
+        found.sort(key=lambda item: order.index(item.controller))
+        self.pending += found
+
+    def _turn_order(self) -> list[int]:
+        return [self.turn_player, *(s for s in range(len(self.players)) if s != self.turn_player)]
+
+    def _flush_triggers(self) -> None:
+        """Put pending triggered abilities on the chain (383.3), asking "you may"
+        abilities whether to go ahead first (383.3.a)."""
+        while self.pending:
+            item = self.pending[0]
+            script = _trigger_script(item)
+            if script.choices is not None and "choice" not in item.data:
+                self.decision = Decision(item.controller, "trigger", script.choices(self, item), item)
+                return
+            self.pending.pop(0)
+            if script.choices is not None and item.data["choice"] is None:
+                self._log(f"{self.names[item.controller]} declines {item.label}")
+                continue                                                        # 383.3.a.2
+            if not self.chain_items:
+                self.chain_by_trigger = True
+            self.chain_items.append(item)
+            self._log(f"Triggers: {item.label}")
+            self.priority = item.controller                                     # 337.4
+            self.passes = 0
+
+    def _choose(self, index: int) -> None:
+        decision, self.decision = self.decision, None
+        label, value = decision.options[index]
+        if decision.kind == "trigger":
+            decision.item.data["choice"] = value
+        else:
+            self._begin_showdown(value)
 
     # --- mulligan (117) -------------------------------------------------------
 
@@ -458,6 +627,7 @@ class Game:
         self._log(f"{self.names[seat]} mulligans {len(objs)}")
         self.mulligan_queue.pop(0)
         if not self.mulligan_queue:
+            self.regular_player = self.first_player
             self._start_turn(self.first_player)                                 # 118
 
     # --- the turn (314-317) ---------------------------------------------------
@@ -466,49 +636,59 @@ class Game:
         self.turn += 1
         self.turn_player = seat
         self.scored.clear()
+        self.cards_played = [0] * len(self.players)
         self._log(f"Turn {self.turn}: {self.names[seat]}")
-
         self.turn_phase = TurnPhase.AWAKEN                                      # 315.1
+        self.priority = None
         for obj in self._on_board(seat):
             obj.exhausted = False
+        # _settle runs the rest of the start of turn, pausing for any chain
 
-        self.turn_phase = TurnPhase.BEGINNING                                   # 315.2
-        for bf in self.battlefields:                                            # 315.2.b: Hold
-            if bf.controller == seat:
-                self._score(seat, bf, conquer=False)
-        if self._cleanup():
-            return
-
-        self.turn_phase = TurnPhase.CHANNEL                                     # 315.3
-        n = CHANNEL_PER_TURN
-        if seat != self.first_player and self.channel_phases[seat] == 0:
-            n += SECOND_PLAYER_EXTRA                                            # 485.7
-        self.channel_phases[seat] += 1
-        self._channel(seat, n)
-
-        self.turn_phase = TurnPhase.DRAW                                        # 315.4
-        self.draw(seat)
-        if self._cleanup():                                                     # a Burn Out can end the game
-            return
-
-        self.turn_phase = TurnPhase.MAIN                                        # 316
-        for p in self.players:                                                  # 316.3
-            p.rune_pool.empty()
-        self.priority = seat                                                    # 312.2.a
-        self.passes = 0
-        self._cleanup()                                                         # 319.2
+    def _next_start_step(self) -> None:
+        seat = self.turn_player
+        if self.turn_phase is TurnPhase.AWAKEN:
+            self.turn_phase = TurnPhase.BEGINNING                               # 315.2.a
+            self.beginning_phases[seat] += 1
+            self._emit("beginning", seat=seat)
+        elif self.turn_phase is TurnPhase.BEGINNING:
+            self.turn_phase = TurnPhase.SCORING                                 # 315.2.b: Hold
+            for bf in self.battlefields:
+                if bf.controller == seat:
+                    self._score(seat, bf, conquer=False)
+        elif self.turn_phase is TurnPhase.SCORING:
+            self.turn_phase = TurnPhase.CHANNEL                                 # 315.3
+            n = CHANNEL_PER_TURN
+            if seat != self.first_player and self.channel_phases[seat] == 0:
+                n += SECOND_PLAYER_EXTRA                                        # 485.7
+            self.channel_phases[seat] += 1
+            self.channel(seat, n)
+        elif self.turn_phase is TurnPhase.CHANNEL:
+            self.turn_phase = TurnPhase.DRAW                                    # 315.4
+            self.draw(seat)
+        elif self.turn_phase is TurnPhase.DRAW:
+            self.turn_phase = TurnPhase.MAIN                                    # 316
+            for p in self.players:                                              # 316.3
+                p.rune_pool.empty()
+            self.priority = seat                                                # 312.2.a
+            self.passes = 0
 
     def _end_turn(self) -> None:
         seat = self.turn_player
         self._log(f"{self.names[seat]} ends turn {self.turn}")
         self.turn_phase = TurnPhase.ENDING                                      # 317
         self.priority = None
-        for p in self.players:
+        for p in self.players:                                                  # 317.2
             for obj in self._on_board(p.seat):
                 if obj.card.is_unit:
                     obj.damage = 0                                              # 317.2.b: heal all units
+                obj.might_mods, obj.granted = [], {}                            # 317.2.c: "this turn" expires
             p.rune_pool.empty()                                                 # 317.2.d
-        self._start_turn(self._opponent(seat))                                  # 317.3
+        if self.extra_turns:                                                    # 737
+            nxt = self.extra_turns.pop(0)
+            self._log(f"{self.names[nxt]} takes an extra turn")
+        else:
+            nxt = self.regular_player = self._opponent(self.regular_player)
+        self._start_turn(nxt)
 
     def _on_board(self, seat: int) -> list[CardInstance]:
         """Every object `seat` controls in their base, their legend zone, and at battlefields."""
@@ -540,8 +720,7 @@ class Game:
     def _move_groups(self, units: list[CardInstance], dest: int | None, dest_name: str) -> list[Action]:
         groups: dict[tuple, list[CardInstance]] = {}
         for obj in sorted(units, key=lambda o: o.oid):
-            where = obj.zone.kind.value if obj.zone else ""
-            groups.setdefault((where, obj.card.card_id, obj.damage, obj.buffs), []).append(obj)
+            groups.setdefault(self._state_key(obj), []).append(obj)
         members = list(groups.values())
         actions = []
         for counts in itertools.product(*(range(len(m) + 1) for m in members)):
@@ -560,18 +739,11 @@ class Game:
         units = [o for o in movable if o.oid in action.units]
         for obj in units:
             obj.exhausted = True                                                # 144.2 / 144.3.c
-        if action.destination is None:
-            dest = zones.base
-            self._log(f"{self.names[seat]} moves {len(units)} unit(s) to base")
-        else:
-            bf = self.battlefields[action.destination]
-            dest = bf.units
-            if not bf.contested and bf.controller != seat:                      # 450
-                bf.contested, bf.contested_by = True, seat
-            self._log(f"{self.names[seat]} moves {', '.join(o.card.name for o in units)} "
-                      f"to {self._bf_name(bf)}")
+        names = ", ".join(o.card.name for o in units)
+        dest_name = "base" if action.destination is None else self._bf_name(self.battlefields[action.destination])
+        self._log(f"{self.names[seat]} moves {names} to {dest_name}")
         for obj in units:
-            self.move(obj, dest)
+            self.move_unit(obj, action.destination)
 
     def _begin_showdown(self, index: int) -> None:
         bf = self.battlefields[index]
@@ -588,6 +760,7 @@ class Game:
         bf = self.battlefields[self.showdown]
         self.attacker = bf.contested_by                                         # 464.2.c.1
         self._log(f"Combat at {self._bf_name(bf)}: {self.names[self.attacker]} attacks")
+        self._emit("defend", seat=self._opponent(self.attacker), bf=bf)        # 464.2.e
 
     def _pass_focus(self, seat: int) -> None:
         self.showdown_passes += 1
@@ -616,6 +789,11 @@ class Game:
 
     # --- combat (459-466) ------------------------------------------------------
 
+    def _is_attacker(self, obj: CardInstance) -> bool:
+        if self.attacker is None or self.showdown is None:
+            return False
+        return obj.controller == self.attacker and obj.zone is self.battlefields[self.showdown].units
+
     def _combat_damage_step(self) -> None:
         """465: if both sides still have units here, each assigns its total Might
         as damage, attacker first; then it is all dealt at once."""
@@ -634,12 +812,12 @@ class Game:
         uses the damage fully (no other enemy unit could also be killed with what
         is left). Leftover damage lands on a survivor, who heals right after."""
         bf = self.battlefields[self.showdown]
-        total = sum(max(0, might(o)) for o in bf.units if o.controller == seat)   # 465.2.a-b
+        total = sum(max(0, self.might(o)) for o in bf.units if o.controller == seat)   # 465.2.a-b
         targets = sorted((o for o in bf.units if o.controller != seat), key=lambda o: o.oid)
-        lethal = {o.oid: max(1, might(o) - o.damage) for o in targets}          # 142.4.b
+        lethal = {o.oid: max(1, self.might(o) - o.damage) for o in targets}     # 142.4.b
         groups: dict[tuple, list[CardInstance]] = {}
         for obj in targets:
-            groups.setdefault((obj.card.card_id, might(obj), obj.damage), []).append(obj)
+            groups.setdefault(self._state_key(obj), []).append(obj)
         members = list(groups.values())
         actions = []
         for counts in itertools.product(*(range(len(m) + 1) for m in members)):
@@ -668,7 +846,7 @@ class Game:
         units = {o.oid: o for o in bf.units}
         for assigned in self.assignments.values():                              # 465.2.d: all at once
             for oid, amount in assigned:
-                units[oid].damage += amount
+                self.deal(units[oid], amount)
         self.assignments = {}
         self._combat_resolution()
 
@@ -677,12 +855,9 @@ class Game:
         then the survivor takes the battlefield."""
         bf = self.battlefields[self.showdown]
         attacker = self.attacker
-        for line in self._kill_lethal():                                        # 323.4-323.5
-            self._log(line)
-        for seat in range(len(self.players)):                                   # 466.1.a.1: heal all units
-            for obj in self._on_board(seat):
-                if obj.card.is_unit:
-                    obj.damage = 0
+        self._kill_lethal()                                                     # 323.4-323.5
+        for obj in self.units():                                                # 466.1.a.1: heal all units
+            obj.damage = 0
         if any(o.controller != attacker for o in bf.units):                     # 466.1.a.2: recall attackers
             for obj in [o for o in bf.units if o.controller == attacker]:
                 self._put(obj, self.players[obj.controller].base)               # 455: not a move
@@ -701,15 +876,14 @@ class Game:
             self._log(f"No units are left at {self._bf_name(bf)}")
         self.priority = self.turn_player if self.turn_phase is TurnPhase.MAIN else None
 
-    def _kill_lethal(self) -> list[str]:
-        """323.5: units with lethal damage die and go to their owner's trash."""
-        lines = []
-        for seat in range(len(self.players)):
-            for obj in self._on_board(seat):
-                if obj.card.is_unit and obj.damage > 0 and obj.damage >= might(obj):
-                    lines.append(f"{obj.card.name} dies")
-                    self.move(obj, self.players[obj.owner].trash)
-        return lines
+    def _kill_lethal(self) -> None:
+        """323.4-323.5: units with lethal damage die and go to their owner's trash.
+        Deathknell triggers first, while the unit is still on the board (808.1.d.2)."""
+        for obj in self.units():
+            if obj.damage > 0 and obj.damage >= self.might(obj):                # 142.4.b
+                self._emit("dies", obj=obj)
+                self._log(f"{obj.card.name} dies")
+                self.move(obj, self.players[obj.owner].trash)
 
     # --- scoring and winning --------------------------------------------------
 
@@ -724,12 +898,13 @@ class Game:
         if conquer and self.points[seat] >= VICTORY_SCORE - 1 and not scored_all:
             self._log(f"{self.names[seat]} {how} {self._bf_name(bf)} but draws instead of the final point")
             self.draw(seat)                                                     # 471.1.b.1
-            return
-        self.points[seat] += 1
-        self._log(f"{self.names[seat]} {how} {self._bf_name(bf)}: {self.points[seat]} points")
+        else:
+            self.points[seat] += 1
+            self._log(f"{self.names[seat]} {how} {self._bf_name(bf)}: {self.points[seat]} points")
+        self._emit("conquer" if conquer else "hold", seat=seat, bf=bf)          # 471.2
 
     def _cleanup(self) -> bool:
-        """323, minus the steps that need combat or damage. Returns True if the game ended."""
+        """323. Returns True if the game ended."""
         if self.is_over:
             return True
         best = max(self.points)
@@ -739,8 +914,7 @@ class Game:
             return True
 
         if not self.assigning:
-            for line in self._kill_lethal():                                    # 323.4-323.5
-                self._log(line)
+            self._kill_lethal()                                                 # 323.4-323.5
 
         open_state = not self.chain_items
         if (self.showdown is not None and self.attacker is None and open_state
@@ -758,12 +932,15 @@ class Game:
             if not bf.contested and len(others) == 1 and not busy:
                 bf.contested, bf.contested_by = True, others.pop()              # 323.11.a
 
-        if self.showdown is None and open_state and self.turn_phase is TurnPhase.MAIN:   # 323.12 / 344.2
-            staged = [i for i, bf in enumerate(self.battlefields)
+        if (self.showdown is None and open_state and self.turn_phase is TurnPhase.MAIN
+                and not self.pending and self.decision is None and not self.assigning):
+            staged = [i for i, bf in enumerate(self.battlefields)               # 323.12-323.13
                       if bf.contested and any(o.controller == bf.contested_by for o in bf.units)]
-            if staged:
-                # the turn player chooses; one move can only stage one showdown
+            if len(staged) == 1:
                 self._begin_showdown(staged[0])
+            elif staged:                                                        # 461.1: the turn player picks
+                options = [(f"Start at {self._bf_name(self.battlefields[i])}", i) for i in staged]
+                self.decision = Decision(self.turn_player, "showdown", options)
         return False
 
     def _end(self, winner: int) -> None:
@@ -776,7 +953,7 @@ class Game:
 
     def _playable_now(self, seat: int, card: CardDef) -> bool:
         """Card has rules support, and 308-310 timing allows it."""
-        if card.is_spell and card.card_id not in SPELL_EFFECTS:
+        if card.is_spell and card.card_id not in SPELLS:
             return False
         if not (card.is_permanent or card.is_spell):
             return False
@@ -787,45 +964,127 @@ class Game:
         # Neutral Open: the turn player, in their Main Phase (310.1.a)
         return seat == self.turn_player and self.turn_phase is TurnPhase.MAIN
 
+    def total_cost(self, seat: int, card: CardDef, *, accelerate: bool = False, deflect: int = 0) -> Cost:
+        """356: the base cost with discounts and additional costs applied."""
+        energy = card.cost.energy
+        if card.card_id in LEGION_DISCOUNT and self.cards_played[seat] >= 1:   # 812
+            energy -= LEGION_DISCOUNT[card.card_id]
+        pips = list(card.cost.power)
+        if accelerate:                                                          # 805.1.a: [1][C]
+            energy += 1
+            pips.append(Pip.CARD)
+        pips += [Pip.ANY] * deflect                                             # 809.1.c
+        return Cost(max(0, energy), tuple(pips))                                # 356.6
+
+    def _deflect(self, seat: int, targets: list[CardInstance]) -> int:
+        """809: +[A] for each time an opponent's Deflect unit is chosen."""
+        return sum(t.card.keyword_value(Keyword.DEFLECT) + t.granted.get("Deflect", 0)
+                   for t in targets if t.controller != seat)
+
     def _play_options(self, seat: int) -> list[Action]:
         zones = self.players[seat]
         actions, seen = [], set()
         for obj in [*zones.hand, *zones.champion]:                              # 108.3.d
-            key = (obj.zone.kind, obj.card.card_id)        # copies in one zone are interchangeable
-            if key in seen or not self._playable_now(seat, obj.card):
+            card = obj.card
+            key = (obj.zone.kind, card.card_id)            # copies in one zone are interchangeable
+            if key in seen or not self._playable_now(seat, card):
                 continue
             seen.add(key)
+            target_sets: list[tuple[CardInstance, ...]] = [()]
+            if card.is_spell:
+                target_sets = self._target_options(seat, SPELLS[card.card_id].targets)
             destinations: list[int | None] = [None]
-            if obj.card.is_unit:                                                # 355.2.a
-                destinations += [i for i, bf in enumerate(self.battlefields) if bf.controller == seat]
-            for payment in self.payment_options(seat, obj.card):
-                for dest in destinations:
-                    label = f"Play {obj.card.name}"
-                    if dest is not None:
-                        label += f" to {self._bf_name(self.battlefields[dest])}"
-                    if payment != Payment():
-                        label += f" ({self._describe(seat, payment)})"
-                    actions.append(Action(ActionKind.PLAY_CARD, label, obj.oid, payment, destination=dest))
+            accelerate = [False]
+            if card.is_unit:
+                destinations += [i for i, bf in enumerate(self.battlefields) if bf.controller == seat]  # 355.2.a
+                if card.has_keyword(Keyword.ACCELERATE):
+                    accelerate.append(True)                                     # 805.2
+            for targets in target_sets:
+                deflect = self._deflect(seat, list(targets))
+                for accel in accelerate:
+                    cost = self.total_cost(seat, card, accelerate=accel, deflect=deflect)
+                    for payment in self.payment_options(seat, card, cost):
+                        for dest in destinations:
+                            label = f"Play {card.name}"
+                            if targets:
+                                label += " on " + " and ".join(self._describe_unit(t) for t in targets)
+                            if dest is not None:
+                                label += f" to {self._bf_name(self.battlefields[dest])}"
+                            if accel:
+                                label += ", accelerated"
+                            if payment != Payment():
+                                label += f" ({self._describe(seat, payment)})"
+                            actions.append(Action(ActionKind.PLAY_CARD, label, obj.oid, payment,
+                                                  destination=dest, targets=tuple(t.oid for t in targets),
+                                                  accelerate=accel))
         return actions
+
+    def _target_options(self, seat: int, kinds: tuple[str, ...]) -> list[tuple[CardInstance, ...]]:
+        """355.5-355.9: every distinct way to choose the targets. Interchangeable
+        units (same card, place and state) count once, and when every choice has
+        the same kind their order doesn't matter. A spell with a target and no
+        legal choice can't be played (355.8)."""
+        if not kinds:
+            return [()]
+        slots = [[u for u in sorted(self.units(), key=lambda o: o.oid) if self._valid_target(u, k, seat)]
+                 for k in kinds]
+        unordered = len(set(kinds)) == 1
+        result, seen = [], set()
+        for combo in itertools.product(*slots):
+            if unordered:
+                counts: dict[int, int] = {}
+                for obj in combo:
+                    counts[obj.oid] = counts.get(obj.oid, 0) + 1
+                per_group: dict[tuple, list[int]] = {}
+                for obj in {o.oid: o for o in combo}.values():
+                    per_group.setdefault(self._state_key(obj), []).append(counts[obj.oid])
+                key = tuple(sorted((k, tuple(sorted(v))) for k, v in per_group.items()))
+            else:
+                key = tuple(self._state_key(o) for o in combo)
+            if key not in seen:
+                seen.add(key)
+                result.append(combo)
+        return result
+
+    def _valid_target(self, obj: CardInstance, kind: str, seat: int) -> bool:
+        if not obj.card.is_unit or obj.zone is None or obj.zone.kind not in (ZoneKind.BASE, ZoneKind.BATTLEFIELD):
+            return False
+        if kind == UNIT_AT_BATTLEFIELD:
+            return obj.zone.kind is ZoneKind.BATTLEFIELD
+        if kind == FRIENDLY_UNIT:
+            return obj.controller == seat
+        return True
 
     def _play_card(self, seat: int, action: Action) -> None:
         zones = self.players[seat]
         obj = next(o for o in [*zones.hand, *zones.champion] if o.oid == action.card_oid)
         card = obj.card
+        units = {u.oid: u for u in self.units()}
+        targets = [units[oid] for oid in action.targets]
+        kinds = SPELLS[card.card_id].targets if card.is_spell else ()
+        cost = self.total_cost(seat, card, accelerate=action.accelerate, deflect=self._deflect(seat, targets))
         self.move(obj, self.chain)                                              # 354
-        item = ChainItem(obj, seat)
+        item = ChainItem(seat, obj=obj, targets=[(t, t.oid, k) for t, k in zip(targets, kinds)],
+                         label=card.name)
+        if not self.chain_items:
+            self.chain_by_trigger = False
         self.chain_items.append(item)
-        self._pay(seat, card, action.payment or Payment())                      # 357
-        self._log(f"{self.names[seat]} plays {card.name}")
+        self._pay(seat, card, cost, action.payment or Payment())                # 357
+        self.cards_played[seat] += 1
+        on = f" on {' and '.join(self._describe_unit(t) for t in targets)}" if targets else ""
+        accelerated = ", accelerated" if action.accelerate else ""
+        self._log(f"{self.names[seat]} plays {card.name}{on}{accelerated}")
         if card.is_permanent:                                                   # 337.2: resolves at once
             self.chain_items.remove(item)
             dest = zones.base if action.destination is None else self.battlefields[action.destination].units
             self.move(obj, dest)                                                # 355.2
-            obj.exhausted = card.is_unit                                        # 359.2.c-d
+            obj.exhausted = card.is_unit and not action.accelerate              # 359.2.c-d / 805.6
+            self._emit("played", seat=seat, obj=obj)
             self._after_resolve()
         else:
             self.priority = seat                                                # 337.4
             self.passes = 0
+            self._emit("played", seat=seat, obj=obj)
 
     def _pass_priority(self, seat: int) -> None:
         self.passes += 1
@@ -835,29 +1094,39 @@ class Game:
             self.priority = self._opponent(seat)                                # 339.2
 
     def _resolve_top(self) -> None:
-        """340.1: the newest item resolves, then the spell goes to its owner's trash."""
+        """340.1: the newest item resolves. A spell then goes to its owner's trash."""
         item = self.chain_items.pop()
-        obj = item.obj
-        self._log(f"{obj.card.name} resolves")
-        SPELL_EFFECTS[obj.card.card_id](self, item)
-        if obj.zone is self.chain:
-            self.move(obj, self.players[obj.owner].trash)                       # 359.3.d
+        self._log(f"{item.label} resolves")
+        if item.obj is not None:
+            script = SPELLS[item.obj.card.card_id]
+            script.resolve(self, item)
+            owner = self.players[item.obj.owner]
+            if item.obj.zone is self.chain:
+                self.move(item.obj, owner.banishment if script.banish else owner.trash)   # 359.3.d / 427
+        else:
+            _trigger_script(item).resolve(self, item)
         self._after_resolve()
 
     def _after_resolve(self) -> None:
         self.passes = 0
         if self.chain_items:
             self.priority = self.chain_items[-1].controller                     # 340.4
-        elif self.showdown is not None:
-            self.focus = self.priority = self._opponent(self.focus)             # 340.2.a / 346
-            self.showdown_passes = 0
+            return
+        by_trigger, self.chain_by_trigger = self.chain_by_trigger, False
+        if self.showdown is not None:
+            if not by_trigger:                                                  # 340.2.a / 346.1
+                self.focus = self._opponent(self.focus)
+                self.showdown_passes = 0
+            self.priority = self.focus
         elif self.turn_phase is TurnPhase.MAIN:
             self.priority = self.turn_player                                    # 335
+        else:
+            self.priority = None                                                # the start of turn carries on
 
     # --- paying costs (356-357) -----------------------------------------------
 
-    def payment_options(self, seat: int, card: CardDef) -> list[Payment]:
-        """Every sensible way `seat` can pay for `card` right now.
+    def payment_options(self, seat: int, card: CardDef, cost: Cost | None = None) -> list[Payment]:
+        """Every sensible way `seat` can pay `cost` (by default the card's own) right now.
 
         Energy has no domain and an exhausted rune can still be recycled, so what
         a payment leaves behind comes down to how many runes stay ready, which
@@ -866,11 +1135,12 @@ class Game:
         is added beyond the cost, and options that leave fewer ready runes than
         another option with the same recycles are dropped.
         """
+        cost = card.cost if cost is None else cost
         zones = self.players[seat]
         pool = zones.rune_pool
-        pips = [p.payable_with(card.domains) for p in card.cost.power]
+        pips = [p.payable_with(card.domains) for p in cost.power]
         usable = [u for u in pool.power if card.is_spell or not u.spells_only]
-        energy_needed = max(0, card.cost.energy - pool.energy)
+        energy_needed = max(0, cost.energy - pool.energy)
         power_needed = len(pips) - len(_match(pips, usable))
 
         ready: dict[str, list[CardInstance]] = {}
@@ -913,7 +1183,7 @@ class Game:
                 best.append(candidates[key])
         return best
 
-    def _pay(self, seat: int, card: CardDef, payment: Payment) -> None:
+    def _pay(self, seat: int, card: CardDef, cost: Cost, payment: Payment) -> None:
         zones = self.players[seat]
         pool = zones.rune_pool
         runes = {r.oid: r for r in zones.runes()}
@@ -932,14 +1202,14 @@ class Game:
             legend.exhausted = True
             pool.power.append(Power("A", LEGEND_POWER[legend.card.card_id]))
 
-        if pool.energy < card.cost.energy:
+        if pool.energy < cost.energy:
             raise ValueError(f"not enough Energy to play {card.name}")
-        pips = [p.payable_with(card.domains) for p in card.cost.power]
+        pips = [p.payable_with(card.domains) for p in cost.power]
         usable = [u for u in pool.power if card.is_spell or not u.spells_only]
         matched = _match(pips, usable)
         if len(matched) < len(pips):
             raise ValueError(f"not enough Power to play {card.name}")
-        pool.energy -= card.cost.energy
+        pool.energy -= cost.energy
         for unit in matched:
             pool.power.remove(unit)
 
@@ -963,6 +1233,18 @@ class Game:
         return "; ".join(parts)
 
     # --- helpers --------------------------------------------------------------
+
+    def _state_key(self, obj: CardInstance) -> tuple:
+        """Everything that tells two units apart for the rules, besides identity."""
+        where = ("base", obj.controller) if obj.zone is None or obj.zone.kind is ZoneKind.BASE else \
+            ("bf", next(i for i, bf in enumerate(self.battlefields) if bf.units is obj.zone))
+        return (where, obj.controller, obj.card.card_id, obj.exhausted, obj.damage, obj.buffs,
+                tuple(obj.might_mods), tuple(sorted(obj.granted.items())))
+
+    def _describe_unit(self, obj: CardInstance) -> str:
+        where = "base" if obj.zone.kind is ZoneKind.BASE else \
+            next(self._bf_name(bf) for bf in self.battlefields if bf.units is obj.zone)
+        return f"{obj.card.name} ({self.names[obj.controller]}, {where})"
 
     def _bf_name(self, bf: Battlefield) -> str:
         """A battlefield's name, plus whose it is when both players brought the same one."""
@@ -990,6 +1272,10 @@ class Game:
                 "rune_pool": zones.rune_pool.view(),
                 "zones": {z.kind.value: z.view(viewer) for z in zones.all()},
             })
+        chain = []
+        for item in self.chain_items:
+            entry = item.obj.view() if item.obj is not None else {"ability": item.label}
+            chain.append(dict(entry, chain_controller=item.controller))
         return {
             "viewer": viewer,
             "turn": self.turn,
@@ -1001,18 +1287,22 @@ class Game:
             "showdown": self.showdown,
             "attacker": self.attacker,
             "assigning": self.assigning[0] if self.assigning else None,
+            "decision": None if self.decision is None else {"seat": self.decision.seat,
+                                                            "kind": self.decision.kind},
+            "extra_turns": list(self.extra_turns),
             "phase": self.phase.value,
             "victory_score": VICTORY_SCORE,
             "winner": self.winner,
             "players": players,
             "battlefields": [bf.view(viewer) for bf in self.battlefields],
-            "chain": [dict(item.obj.view(), chain_controller=item.controller) for item in self.chain_items],
+            "chain": chain,
+            "unit_might": {str(u.oid): self.might(u) for u in self.units()},
         }
 
 
-def might(obj: CardInstance) -> int:
-    """A unit's current Might: printed Might plus buffs."""
-    return (obj.card.might or 0) + obj.buffs
+def _trigger_script(item: ChainItem) -> TriggerScript:
+    card_id, index = item.trigger
+    return TRIGGERS[card_id][index]
 
 
 def _rune_domain(rune: CardInstance) -> str:
