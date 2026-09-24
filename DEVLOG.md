@@ -130,10 +130,22 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   action field needs a matching feature.
 - **Token cap.** Only the first `MAX_TOKENS` (64) tokens are kept. Hands and the board
   come first and trash piles last; random Kai'Sa games peak around 41.
+- **Actions the policy never trained on get arbitrary scores.** Concede is the known
+  case (the sim hides it from agents). Any new action kind needs training before an
+  agent is shown it.
 - **Draws.** Games cut off at `max_decisions` (500) give both seats 0. None happened in
   300 random games.
 
 ---
+
+## 2026-09-24: Agents in the sim no longer see Concede
+
+- The sim turns on `allow_concede` for the human, but it passed the same action list
+  to the agent. Training never offers Concede, so the policy scored an action it had
+  never seen, and the `kaisa-v1` agent conceded in 29 of 30 games. Training data was
+  not affected (no training position offers Concede).
+- `sim.py` now removes Concede from the agent's actions, and `PPOAgent` ignores it too.
+  Tests check both, plus that the training env never offers it.
 
 ## 2026-09-24: PPO update-size fixes
 

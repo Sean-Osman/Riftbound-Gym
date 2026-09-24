@@ -9,7 +9,7 @@ torch = pytest.importorskip("torch")
 
 import ppo  # noqa: E402
 from env import RiftboundEnv  # noqa: E402
-from game import Game, RandomAgent, load_demo_decks, play_game  # noqa: E402
+from game import ActionKind, Game, RandomAgent, load_demo_decks  # noqa: E402
 
 
 def encodings(n=40):
@@ -77,8 +77,13 @@ def test_training_runs_saves_resumes_and_the_agent_plays(tmp_path, monkeypatch):
 
     agent = ppo.PPOAgent(tmp_path / "t" / "latest.pt")
     assert agent.name.endswith("#3")
-    winner = play_game(Game(list(load_demo_decks()), seed=5), [agent, RandomAgent(5)])
-    assert winner in (0, 1)
+    g = Game(list(load_demo_decks()), seed=5, allow_concede=True)
+    while not g.is_over:                            # offered Concede, but never takes it
+        seat = g.acting_player
+        player = agent if seat == 0 else RandomAgent(5)
+        action = player.act(g.observation(seat), g.legal_actions(seat))
+        assert action.kind is not ActionKind.CONCEDE
+        g.step(action)
 
 
 def test_updates_stop_early_once_kl_passes_the_target(tmp_path, monkeypatch):

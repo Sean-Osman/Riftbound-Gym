@@ -40,7 +40,7 @@ import torch.nn.functional as F
 from agents import GreedyAgent
 from env import (ACTION_DIM, GLOBAL_DIM, N_POINTERS, TOKEN_DIM, CardVocab, Encoded, Encoder,
                  RiftboundEnv)
-from game import ROOT, Action, RandomAgent
+from game import ROOT, Action, ActionKind, RandomAgent
 
 CHECKPOINTS = ROOT / "checkpoints"
 
@@ -196,9 +196,11 @@ class PPOAgent:
 
     @torch.no_grad()
     def act(self, observation: dict[str, Any], legal: list[Action]) -> Action:
-        logits, _ = self.model(Batch([self.encoder.encode(observation, legal)]))
+        # Training never offers Concede, so the policy's score for it means nothing.
+        options = [a for a in legal if a.kind is not ActionKind.CONCEDE] or legal
+        logits, _ = self.model(Batch([self.encoder.encode(observation, options)]))
         i, _ = _pick(logits[0], self.rng, greedy=not self.sample)
-        return legal[i]
+        return options[i]
 
 
 # ---------------------------------------------------------------------------

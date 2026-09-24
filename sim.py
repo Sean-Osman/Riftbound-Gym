@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
-from game import Agent, Game, RandomAgent, load_demo_decks
+from game import ActionKind, Agent, Game, RandomAgent, load_demo_decks
 
 STATIC = Path(__file__).parent / "sim"
 
@@ -49,7 +49,10 @@ class Session:
         g = self.game
         while not g.is_over and g.acting_player != self.human_seat:
             seat = g.acting_player
-            g.step(self.agent.act(g.observation(seat), g.legal_actions(seat)))
+            # Concede is only for the human: agents are trained without it (Game's
+            # default), so a policy would score an action it has never seen.
+            legal = [a for a in g.legal_actions(seat) if a.kind is not ActionKind.CONCEDE]
+            g.step(self.agent.act(g.observation(seat), legal))
 
     def act(self, index: int) -> None:
         legal = self.game.legal_actions(self.human_seat)

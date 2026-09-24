@@ -177,3 +177,37 @@ def test_greedy_agent_beats_random():
         agents[seat] = GreedyAgent(seed)
         wins += play_game(Game(decks, seed=seed, cache_actions=True), agents) == seat
     assert wins >= 16
+
+
+def test_training_env_never_offers_concede():
+    env = RiftboundEnv()
+    for seed in range(10):
+        env.reset(seed)
+        rng = random.Random(seed)
+        while not env.done:
+            assert all(a.kind is not ActionKind.CONCEDE for a in env.legal)
+            env.step(rng.randrange(len(env.legal)))
+
+
+def test_sim_offers_concede_to_the_human_but_not_the_agent():
+    import sim
+
+    class Recorder:
+        name = "recorder"
+
+        def __init__(self):
+            self.saw_concede = False
+            self.rng = random.Random(0)
+
+        def act(self, observation, legal):
+            self.saw_concede |= any(a.kind is ActionKind.CONCEDE for a in legal)
+            return self.rng.choice(legal)
+
+    session = sim.Session("random", human_seat=0)
+    recorder = session.agent = Recorder()
+    rng = random.Random(1)
+    while not session.game.is_over:
+        legal = session.game.legal_actions(0)
+        assert legal[-1].kind is ActionKind.CONCEDE
+        session.act(rng.randrange(len(legal) - 1))          # anything but Concede
+    assert not recorder.saw_concede
