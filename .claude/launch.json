@@ -4,8 +4,24 @@
     {
       "name": "riftbound-sim",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["sim.py", "--port", "8765"],
+      "runtimeArgs": [
+        "sim.py",
+        "--port",
+        "8765"
+      ],
       "port": 8765
+    },
+    {
+      "name": "riftbound-sim-ppo",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "sim.py",
+        "--agent",
+        "ppo:PPOAgent",
+        "--port",
+        "8766"
+      ],
+      "port": 8766
     }
   ]
 }

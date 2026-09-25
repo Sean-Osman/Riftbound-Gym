@@ -75,6 +75,9 @@ class CardInstance:
     damage: int = 0
     buffs: int = 0
     facedown: bool = False
+    # "this turn" effects, cleared in the Ending Phase (317.2.c)
+    might_mods: list[tuple[int, int | None]] = field(default_factory=list)   # (amount, minimum)
+    granted: dict[str, int] = field(default_factory=dict)                   # keyword -> value, e.g. Assault 3
 
     def become_new_object(self) -> None:
         """124 / 124.1: new identity, all temporary modifications dropped."""
@@ -84,6 +87,8 @@ class CardInstance:
         self.damage = 0
         self.buffs = 0
         self.facedown = False
+        self.might_mods = []
+        self.granted = {}
 
     def view(self) -> dict[str, Any]:
         """Public face of the object, for observations / the UI."""
@@ -104,6 +109,7 @@ class CardInstance:
             "exhausted": self.exhausted,
             "damage": self.damage,
             "buffs": self.buffs,
+            "granted": dict(self.granted),
         }
 
 
@@ -162,6 +168,7 @@ class Battlefield:
     facedown: Zone
     controller: int | None = None
     contested: bool = False
+    contested_by: int | None = None      # 190.3.a: the player who applied Contested
 
     @classmethod
     def create(cls, card: CardInstance) -> Battlefield:
@@ -172,21 +179,36 @@ class Battlefield:
             "card": self.card.view(),
             "controller": self.controller,
             "contested": self.contested,
+            "contested_by": self.contested_by,
             "units": self.units.view(viewer)["objects"],
             "facedown": self.facedown.view(viewer),
         }
+
+
+@dataclass(frozen=True)
+class Power:
+    """163.2: one Power in a rune pool."""
+    domain: str                  # domain letter, or "A" for Universal Power (163.2.b)
+    spells_only: bool = False    # e.g. Kai'Sa's "Use only to play spells"
 
 
 @dataclass
 class RunePool:
     """165: available Energy and Power. Not a zone and not a game object."""
     energy: int = 0
-    power: dict[str, int] = field(default_factory=dict)    # domain letter or "A" -> amount
-    runes: list[CardInstance] = field(default_factory=list)
+    power: list[Power] = field(default_factory=list)
 
     def empty(self) -> None:
+        """167.1: unspent Energy and Power are lost."""
         self.energy = 0
         self.power.clear()
+
+    def view(self) -> dict[str, Any]:
+        power: dict[str, int] = {}
+        for p in self.power:
+            key = p.domain + (" (spells)" if p.spells_only else "")
+            power[key] = power.get(key, 0) + 1
+        return {"energy": self.energy, "power": power}
 
 
 class PlayerZones:
@@ -203,6 +225,10 @@ class PlayerZones:
         self.legend = Zone(ZoneKind.LEGEND, seat)
         self.base = Zone(ZoneKind.BASE, seat)
         self.rune_pool = RunePool()
+
+    def runes(self) -> list[CardInstance]:
+        """Channeled runes sit in the base (323.7)."""
+        return [o for o in self.base if o.card.is_rune]
 
     def all(self) -> list[Zone]:
         return [self.main_deck, self.rune_deck, self.hand, self.trash, self.banishment,

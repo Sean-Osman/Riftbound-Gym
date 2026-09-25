@@ -3,14 +3,15 @@
 A rules-accurate simulator for the Riftbound TCG, built as an RL environment. The end goal is to
 train PPO agents to pilot meta decks, measure matchup win rates between decks, and serve the agents
 as practice opponents in the browser sim. See README.md for the roadmap. The rules engine is still
-incomplete: games end with a placeholder random winner after `placeholder_turns` turns.
+incomplete: only the cards in the Kai'Sa deck are scripted (see DEVLOG.md for known gaps).
 
 ## Commands
 
 ```bash
-python3 -m pytest                 # tests (pytest-style functions in test_*.py; pip install pytest if missing)
-python3 game.py                   # 200 headless random-vs-random games
-python3 sim.py [--agent mod:Cls]  # browser sim on :8765 (also the "riftbound-sim" config in .claude/launch.json)
+.venv/bin/python -m pytest                 # tests (setup: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)
+python3 game.py                            # 200 headless random-vs-random games
+python3 sim.py [--agent mod:Cls]           # browser sim on :8765 (also the "riftbound-sim" config in .claude/launch.json)
+.venv/bin/python ppo.py --run NAME         # PPO self-play training; output in checkpoints/NAME/
 ```
 
 ## Architecture
@@ -28,7 +29,26 @@ python3 sim.py [--agent mod:Cls]  # browser sim on :8765 (also the "riftbound-si
     agents cheat.
   - Use `self.rng` for all randomness so games stay reproducible from `seed`. `Game` must remain
     deep-copyable and picklable (used for search/rollouts).
+- `step` runs everything that needs no decision, including passing priority or ending the turn
+  when that is a player's only option, so `acting_player` always faces a real choice.
+- `scripts.py` says what each card does (`SPELLS`, `TRIGGERS`, `LEGEND_POWER`, `LEGION_DISCOUNT`);
+  scripts only call Game's public helpers (`targets`, `deal`, `add_might`, `grant`, `draw`,
+  `channel`, `move_unit`, ...). A spell without an entry is unplayable, and that must stay the
+  case for unimplemented cards rather than resolving with no effect. Tests register dummy cards
+  there under test-only ids.
+- Game state stays plain data so it can be pickled: chain items point at trigger scripts by
+  `(card_id, index)`, never by function.
+- Legal actions are deduplicated: copies of a card in the same zone give one action, and payment
+  options (`Game.payment_options`) differ only in what they leave behind (ready runes, recycled
+  domains, legend use). Moves group interchangeable units the same way. Keep it that way; every extra action makes PPO's job harder.
+- Concede is only offered with `Game(..., allow_concede=True)` (the sim does this). Keep it off
+  for anything RL-facing.
 - Agents implement the `Agent` protocol: a `name` attribute and `act(observation, legal) -> Action`.
+- `env.py` encodes observations and legal actions for the policy. It reads only
+  `observation(seat)`, never `Game`, so hidden information can't leak; any new field
+  it needs goes into the observation first. Every legal action must encode to a
+  distinct row. `ppo.py` holds the model and trainer; `agents.py` the scripted baselines.
+- The engine itself stays stdlib-only; numpy and torch are only for env.py / ppo.py.
 
 ## Rules source
 
@@ -38,6 +58,9 @@ the rule number in a trailing comment (`# 485.3`). If the rules are ambiguous, a
 guessing.
 
 ## Workflow
+
+- **DEVLOG.md**: every engine change adds a dated entry (what changed and which rules), and the
+  Known pitfalls section stays current. Read the pitfalls before changing the engine.
 
 - **Tests with every change**: any change to game logic, cards, zones or deck loading adds or
   updates tests in `test_*.py`. Run the full suite before calling a change done.

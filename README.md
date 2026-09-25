@@ -8,11 +8,12 @@ against each other to measure which matchups are favored and which are not. As
 a side effect, the trained agents double as practice opponents you can play
 against in the browser.
 
-> **Status: early.** Deck loading, game setup, zones, runes/energy and playing
-> permanents are in place. Combat, spells, abilities, scoring and the
-> showdown/chain system are not implemented yet, so games currently end with
-> a placeholder random winner after a fixed number of turns. There is no PPO
-> training code yet.
+> **Status: early.** The Kai'Sa mirror plays under the real rules: the turn
+> structure, runes and costs, the chain with Reactions, triggered abilities,
+> showdowns and focus, combat, scoring, and every card in the deck. Other decks'
+> cards aren't scripted yet. See [DEVLOG.md](DEVLOG.md) for what changed and the
+> known pitfalls. The RL environment and PPO self-play trainer are in place;
+> no trained agents yet.
 
 ## Why
 
@@ -94,7 +95,17 @@ python3 sim.py --agent my_module:MyAgent --seat 1 --port 9000
 Run the tests (they are plain pytest-style functions):
 
 ```bash
-pip install pytest && python3 -m pytest
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pytest
+```
+
+Train a PPO agent on the Kai'Sa mirror (self-play, see `ppo.py` for all options),
+then play against it:
+
+```bash
+.venv/bin/python ppo.py --run kaisa-v1            # Ctrl-C any time; --resume continues
+tail -f checkpoints/kaisa-v1/log.jsonl            # win rates, losses, throughput
+.venv/bin/python sim.py --agent ppo:PPOAgent      # newest checkpoint
 ```
 
 ## How it works
@@ -117,8 +128,8 @@ while not game.is_over:
   (the opponent's hand, deck order, etc.), so agents can't cheat.
 - `legal_actions(seat)` enumerates every legal move, which maps directly
   onto a masked discrete action space for PPO.
-- `acting_player` is whoever must decide next. Once Reactions and focus are
-  implemented, that will not always be the turn player.
+- `acting_player` is whoever must decide next: the player with priority, which
+  switches to the opponent while spells wait on the chain for Reactions.
 - Games are seeded and deterministic, and `Game` objects can be deep-copied
   and pickled.
 
@@ -133,12 +144,17 @@ player owns their own set of zones.
 | --- | --- |
 | `cards.py` | Static card definitions (`CardDef`), costs, domains, keywords, deck-legality checks |
 | `zones.py` | Per-game object state (`CardInstance`), zones, battlefields, rune pool, visibility |
+| `scripts.py` | What each card does: spell effects and targets, triggered abilities, keyword costs |
 | `game.py` | `Deck`, `Game` (setup, turn structure, decision loop), `Action`, `Agent`, `RandomAgent` |
+| `env.py` | RL environment: encodes observations and legal actions as arrays |
+| `agents.py` | Scripted baseline agents (`GreedyAgent`) |
+| `ppo.py` | Policy network, PPO self-play trainer, `PPOAgent` |
 | `sim.py` + `sim/index.html` | Local web UI for playing against an agent |
 | `import_sheet.py` | Converts a tab of the card spreadsheet (`.xlsx`) into card JSON |
 | `card_data/` | Card JSON loaded by `cards.load_card_pool()` |
 | `decks/` | Decklists: card IDs and counts, looked up in the card pool |
 | `test_*.py` | Tests |
+| `DEVLOG.md` | What changed and known pitfalls; update it with every engine change |
 | `Riftbound-Core-Rules-*.pdf` | The official Core Rules the engine follows |
 
 ## Card data
@@ -179,21 +195,27 @@ To add a deck:
 
 ## Roadmap
 
-**Phase 1: Rules engine** (in progress)
+**Phase 1: Rules engine** (done for the Kai'Sa mirror)
 - [x] Card model, deck legality, zones, visibility
-- [x] Setup, turn structure, runes/energy, playing permanents
+- [x] Setup, mulligan and the phases of the turn
+- [x] Runes, the rune pool and paying costs
+- [x] The chain, priority and Reactions
+- [x] Moving units, showdowns and focus, conquering battlefields
+- [x] Combat
+- [x] Victory at 8 points, Hold scoring and burning out (running out of cards)
 - [x] Browser sim and pluggable agent interface
 - [x] Random legal-move agent
-- [ ] Movement, combat, and conquering/holding battlefields
-- [ ] Spells, the chain, Reactions and focus
-- [ ] Triggered, activated and static abilities
-- [ ] Scoring, victory at 8 points, and burning out (running out of cards)
-- [ ] Kai'Sa mirror fully playable under the real rules
+- [x] Damage, death and "this turn" effects
+- [x] Spell effects with targets, triggered abilities, extra turns
+- [x] Keywords in the Kai'Sa deck (Accelerate, Legion, Deflect, Assault, Deathknell)
+- [x] Kai'Sa mirror fully playable under the real rules
 
 **Phase 2: Training**
-- [ ] Gymnasium-style environment wrapper with observation encoding and action masks
-- [ ] PPO self-play on the Kai'Sa mirror
-- [ ] Trained agents selectable as opponents in the sim
+- [x] Gymnasium-style environment wrapper with observation and action encoding
+- [x] Scripted baseline agent (GreedyAgent)
+- [x] PPO self-play trainer with an opponent pool, evaluation and checkpoints
+- [ ] Train a Kai'Sa mirror agent that clearly beats GreedyAgent
+- [x] Trained agents selectable as opponents in the sim (`--agent ppo:PPOAgent`)
 
 **Phase 3: Meta analysis**
 - [ ] Add the rest of the Origins meta decks
@@ -208,7 +230,7 @@ To add a deck:
 
 ## Contributing
 
-Work is tracked in GitHub issues. Claim or open an issue before starting, so
+Work is tracked in GitHub issues, and [DEVLOG.md](DEVLOG.md) records changes and known pitfalls. Claim or open an issue before starting, so
 two people don't end up building the same thing. Work on a branch and open a pull
 request against `main`. Please include tests for any change to game logic, and
 cite the Core Rules section a behavior comes from in a comment.
