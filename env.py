@@ -45,7 +45,7 @@ POWER_KEYS = DOMAINS + ["A"]
 TURN_PHASES = [p.value for p in TurnPhase]
 ACTION_KINDS = list(ActionKind)
 TOKEN_ZONES = ["hand", "base", "legend", "champion", "battlefield", "battlefield_card",
-               "chain", "trash", "banishment"]
+               "chain", "trash", "banishment", "facedown", "choice"]
 CARD_TYPES = ["unit", "spell", "gear", "battlefield", "legend"]
 
 PAD, UNKNOWN = 0, 1          # card indices with no card behind them
@@ -87,7 +87,8 @@ TOKEN_FEATURES = _layout(
     + ["exhausted", "damage", "might", "printed_might", "might_change", "buffs", "granted",
        "count", "chain_depth", "ability", "attacking", "bf_uncontrolled", "bf_contested",
        "bf_contested_by_me", "bf_showdown", "bf_scored_by_me", "bf_scored_by_them",
-       "energy_cost", "power_cost"]
+       "energy_cost", "power_cost", "stunned", "ganking_granted", "hidden_playable",
+       "bf_facedown_mine", "bf_facedown_theirs"]
 )
 TOKEN_DIM = len(TOKEN_FEATURES)
 
@@ -102,8 +103,8 @@ def _player_features(prefix: str) -> list[str]:
 GLOBAL_FEATURES = _layout(
     ["points_diff", "turn", "my_turn", "priority_mine", "focus_mine", "focus_none",
      "showdown", "combat", "attacker_mine", "assigning_mine", "decision", "decision_trigger",
-     "decision_showdown", "chain_length", "chain_top_mine", "chain_by_me",
-     "pool_energy", "pool_spells_only"]
+     "decision_showdown", "decision_resolve", "decision_options", "chain_length", "chain_top_mine",
+     "chain_by_me", "pool_energy", "pool_spells_only", "victory_score"]
     + [f"pool_{k}" for k in POWER_KEYS]
     + [f"phase_{p}" for p in TURN_PHASES]
     + _player_features("me") + _player_features("them")
@@ -117,7 +118,7 @@ ACTION_FEATURES = _layout(
     + [f"recycle_{d}" for d in DOMAINS]
     + ["units", "unit_might", "targets", "targets_mine", "targets_theirs", "set_aside"]
     + [f"damage_{i}" for i in range(N_POINTERS)]
-    + [f"choice_{i}" for i in range(4)] + ["declines"]
+    + [f"choice_{i}" for i in range(4)] + ["declines", "amount"]
 )
 ACTION_DIM = len(ACTION_FEATURES)
 
@@ -172,7 +173,9 @@ class Encoder:
             energy, power = _cost(view["cost"])
             f.update(exhausted=view["exhausted"], damage=view["damage"] / 4, might=current / 8,
                      printed_might=printed / 8, might_change=(current - printed) / 4,
-                     buffs=view["buffs"], granted=sum(v or 0 for v in view["granted"].values()) / 4,
+                     buffs=view["buffs"], granted=sum(v or 0 for k, v in view["granted"].items()
+                                                      if k != "Ganking") / 4,
+                     ganking_granted="Ganking" in view["granted"], stunned=view.get("stunned", False),
                      energy_cost=energy / 8, power_cost=power / 4)
             f.update(extra)
             rows.append((view["card_id"], f, view["oid"]))
@@ -196,12 +199,19 @@ class Encoder:
                  "bf_contested_by_me": bf["contested_by"] == me, "bf_showdown": obs["showdown"] == i,
                  "bf_scored_by_me": (me, i) in scored, "bf_scored_by_them": (1 - me, i) in scored,
                  f"bf_{i}": 1.0}
+            facedown = bf["facedown"]["objects"]
+            f["bf_facedown_mine"] = sum(1 for v in facedown if not v.get("hidden") and v["controller"] == me)
+            f["bf_facedown_theirs"] = bf["facedown"]["count"] - f["bf_facedown_mine"]
             card_row(bf["card"], "battlefield_card", **f)
             rows[-1][1].update(mine=controller == me, theirs=controller not in (None, me))
             bf_token[i] = len(rows) - 1
             for view in bf["units"]:
                 attacking = obs["attacker"] is not None and obs["showdown"] == i and view["controller"] == obs["attacker"]
                 card_row(view, "battlefield", **{f"bf_{i}": 1.0, "attacking": attacking})
+            for view in facedown:                           # only my own hidden cards are visible
+                if not view.get("hidden"):
+                    playable = view["hidden_turn"] is not None and view["hidden_turn"] < obs["turn"]
+                    card_row(view, "facedown", **{f"bf_{i}": 1.0, "hidden_playable": playable})
         chain = obs["chain"]
         for depth, entry in enumerate(reversed(chain)):
             if "ability" in entry:
@@ -211,6 +221,14 @@ class Encoder:
             else:
                 card_row(entry, "chain", chain_depth=depth / 4)
                 rows[-1][1].update(mine=entry["chain_controller"] == me, theirs=entry["chain_controller"] != me)
+        decision = obs["decision"]
+        choice_token: dict[int, int] = {}                   # option index -> token, for cards not shown elsewhere
+        if decision is not None and decision["seat"] == me:
+            shown = {oid for _, _, oid in rows if oid is not None}
+            for k, option in enumerate(decision["options"]):
+                if "card_id" in option and option["oid"] not in shown:
+                    choice_token[k] = len(rows)
+                    rows.append((option["card_id"], {"zone_choice": 1.0}, None))
         for seat in order:                                  # piles: one token per distinct card
             for zone in ("trash", "banishment"):
                 counts: dict[str, int] = {}
@@ -233,8 +251,9 @@ class Encoder:
         glob = self._global(obs, me, runes)
         actions = np.zeros((len(legal), ACTION_DIM), np.float32)
         pointers = np.full((len(legal), N_POINTERS), -1, np.int64)
+        choice_token = {k: t for k, t in choice_token.items() if t < MAX_TOKENS}
         for i, action in enumerate(legal):
-            self._action(action, obs, me, runes, oid_token, bf_token, tokens, might,
+            self._action(action, obs, me, runes, oid_token, bf_token, choice_token, tokens, might,
                          actions[i], pointers[i])
         return Encoded(cards, tokens, mask, glob, actions, pointers)
 
@@ -269,6 +288,9 @@ class Encoder:
         put("decision", decision is not None)
         put("decision_trigger", decision is not None and decision["kind"] == "trigger")
         put("decision_showdown", decision is not None and decision["kind"] == "showdown")
+        put("decision_resolve", decision is not None and decision["kind"] == "resolve")
+        put("decision_options", 0 if decision is None else decision.get("count", 0) / 4)
+        put("victory_score", obs["victory_score"] / 8)
         put("chain_length", len(obs["chain"]) / 4)
         put("chain_top_mine", bool(obs["chain"]) and obs["chain"][-1]["chain_controller"] == me)
         put("chain_by_me", any(e["chain_controller"] == me for e in obs["chain"]))
@@ -297,8 +319,8 @@ class Encoder:
         return g
 
     def _action(self, action: Action, obs: dict[str, Any], me: int, runes: dict[int, tuple[int, str, bool]],
-                oid_token: dict[int, int], bf_token: dict[int, int], tokens: np.ndarray,
-                might: dict[int, int], row: np.ndarray, ptr: np.ndarray) -> None:
+                oid_token: dict[int, int], bf_token: dict[int, int], choice_token: dict[int, int],
+                tokens: np.ndarray, might: dict[int, int], row: np.ndarray, ptr: np.ndarray) -> None:
         def put(name: str, value: float) -> None:
             row[ACTION_FEATURES[name]] = float(value)
 
@@ -308,12 +330,12 @@ class Encoder:
 
         put(f"kind_{action.kind.value}", 1)
         kind = action.kind
-        if kind in (ActionKind.PLAY_CARD, ActionKind.MOVE):
+        if kind in (ActionKind.PLAY_CARD, ActionKind.MOVE, ActionKind.HIDE):
             if action.destination is None:
                 put("to_base", 1)
             elif action.destination < MAX_BATTLEFIELDS:
                 put(f"to_bf_{action.destination}", 1)
-        if kind is ActionKind.PLAY_CARD:
+        if kind in (ActionKind.PLAY_CARD, ActionKind.ACTIVATE, ActionKind.HIDE):
             point(0, action.card_oid)
             for slot, oid in enumerate(action.targets[:N_POINTERS - 1], start=1):
                 point(slot, oid)
@@ -322,6 +344,8 @@ class Encoder:
             owners = [tokens[oid_token[o], TOKEN_FEATURES["mine"]] for o in action.targets if o in oid_token]
             put("targets_mine", sum(owners) / 2)
             put("targets_theirs", (len(owners) - sum(owners)) / 2)
+            if kind is ActionKind.ACTIVATE and action.choice is not None and action.choice < 4:
+                put(f"choice_{action.choice}", 1)
             pay = action.payment
             if pay is not None:
                 mine = {oid: r for oid, r in runes.items() if r[0] == me}
@@ -357,15 +381,26 @@ class Encoder:
                 put("declines", option["declines"])
                 if "oid" in option:
                     point(0, option["oid"])
+                    if ptr[0] < 0 and action.choice in choice_token:
+                        ptr[0] = choice_token[action.choice]
                 elif "battlefield" in option and option["battlefield"] in bf_token:
                     ptr[0] = bf_token[option["battlefield"]]
+                if "amount" in option:
+                    put("amount", option["amount"] / 4)
+                if "location" in option:
+                    dest = option["location"]
+                    if dest is None:
+                        put("to_base", 1)
+                    elif dest < MAX_BATTLEFIELDS:
+                        put(f"to_bf_{dest}", 1)
 
 
 # --- environments --------------------------------------------------------------
 
 class RiftboundEnv:
     """Both seats are driven by the caller, one decision at a time. `step` takes an
-    index into `legal`. A game that runs past `max_decisions` is cut off as a draw."""
+    index into `legal`. A game that runs past `max_decisions` is cut off as a draw.
+    `reset` can switch to another pair of decks (seat 0's first)."""
 
     def __init__(self, decks: Sequence[Deck] | None = None, *, seed: int | None = None,
                  vocab: CardVocab | None = None, max_decisions: int = MAX_DECISIONS):
@@ -376,7 +411,9 @@ class RiftboundEnv:
         self.max_decisions = max_decisions
         self.reset(seed)
 
-    def reset(self, seed: int | None = None) -> None:
+    def reset(self, seed: int | None = None, decks: Sequence[Deck] | None = None) -> None:
+        if decks is not None:
+            self.decks = list(decks)
         self.game = Game(self.decks, seed=seed, cache_actions=True)
         self.decisions = 0
         self.truncated = False

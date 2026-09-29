@@ -96,7 +96,26 @@ def test_kaisa_card_data():
     assert not by_name["Cleave"].has_keyword(Keyword.ASSAULT)   # it grants Assault, doesn't have it
     assert by_name["Pouty Poro"].keyword_value(Keyword.DEFLECT) == 1
     assert by_name["Time Warp"].cost == Cost(10, parse_power("4B"))
-    assert all(in_domain_identity(c, legend.domains) for c in pool.values())
+    import json
+    ids = {c["card_id"] for c in json.loads((Path(__file__).parent / "card_data" / "kaisa_deck.json").read_text())}
+    assert all(in_domain_identity(pool[i], legend.domains) for i in ids)
+
+
+def test_origins_meta_card_data():
+    """Legends and signature cards get both domains, Power costs come from the
+    overrides (the sheet has no Power column), and errata'd text is used."""
+    pool = load_card_pool(Path(__file__).parent / "card_data")
+    by_name = {c.name: c for c in pool.values()}
+    assert by_name["Annie, Dark Child"].domains == {Domain.FURY, Domain.CHAOS}
+    assert by_name["Master Yi, Wuju Bladesman"].domains == {Domain.CALM, Domain.BODY}
+    assert by_name["Miss Fortune, Bounty Hunter"].domains == {Domain.BODY, Domain.CHAOS}
+    assert by_name["Bullet Time"].domains == {Domain.BODY, Domain.CHAOS} and by_name["Bullet Time"].is_signature
+    assert by_name["Volibear, Imposing"].cost == Cost(12, parse_power("2O"))
+    assert by_name["Volibear, Imposing"].keyword_value(Keyword.SHIELD) == 3
+    assert by_name["Volibear, Imposing"].has_keyword(Keyword.TANK)
+    assert by_name["Fight or Flight"].has_keyword(Keyword.HIDDEN) and by_name["Fight or Flight"].has_keyword(Keyword.ACTION)
+    assert by_name["Tasty Faefolk"].has_keyword(Keyword.DEATHKNELL)
+    assert "Heal that unit" in by_name["Zhonya's Hourglass"].rules_text
 
 
 if __name__ == "__main__":

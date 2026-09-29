@@ -11,10 +11,36 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 ## Known pitfalls
 
 ### Rules that are simplified or missing
-- **Only the Kai'Sa deck is scripted.** `scripts.py` covers exactly the cards in
-  `decks/kaisa.json`. Any other spell is unplayable and any other unit has no
-  abilities. Keywords outside the deck (Tank, Backline, Shield, Hidden, Ganking, ...)
-  are not implemented.
+- **Only the four meta decks are scripted.** `scripts.py` covers the Main Board and
+  Rune Deck of `decks/kaisa.json`, `annie.json`, `master_yi.json` and `miss_fortune.json`
+  (not their Side Boards). Any other spell is unplayable and any other unit has no
+  abilities. Keywords outside these decks (Backline, Temporary, Vision, Equip, ...) are
+  not implemented.
+- **"When you play" triggers fire as a spell is played, not as it resolves.** Rule 419.4.a
+  says they trigger once playing is complete, and a countered spell never triggers them
+  (419.4.a.1). Here Ravenbloom Student and Darius still trigger for a spell that Defy or
+  Wind Wall later counters.
+- **Choices the engine makes for the player.** A few choices that almost never matter
+  are made automatically to keep the action count down:
+  - Zhonya's Hourglass saves the dying friendly unit with the most Might when several die
+    at once (373 lets the controller pick).
+  - Vi's "Recycle 1 from your trash" recycles a non-spell first (Annie, Stubborn
+    returns spells).
+  - Annie's legend readies any 2 exhausted runes (which ones can't matter: Energy has no
+    domain and exhausted runes can still be recycled).
+  - Bullet Time's "pay any amount of [A]" uses the rune pool first, then recycles runes,
+    exhausted ones first. At most 8 is offered.
+  - Soulgorger pays the replayed unit's Power the way that keeps the most runes ready.
+- **Options that are left out on purpose.** Miss Fortune's legend is only offered on
+  friendly units at battlefields (Ganking does nothing anywhere else). Move spells don't
+  offer moves the rules would ignore (Ride the Wind out of Vilemaw's Lair to base), and
+  Flash isn't offered with zero targets (355.13 allows it, but it does nothing).
+- **Showdowns can start in the Ending Step.** Dazzling Aurora can play Deadbloom Predator
+  to an occupied enemy battlefield, or Sneaky Deckhand to an open one, at the end of the
+  turn. The cleanup then starts the combat or showdown right away rather than waiting.
+  The rules don't say; this is a judgment call.
+- **Units played by effects count as cards played** (Dazzling Aurora, Soulgorger), so they
+  count toward Darius and Legion.
 - **Order of simultaneous triggers (383.3.d).** The controller should choose the
   order. The engine puts the turn player's triggers first (as the rules say) but
   orders each player's own triggers by board position. Only matters with several
@@ -48,8 +74,10 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   matter once effects react to damage being dealt.
 - **Runes with several domains.** `_rune_domain` takes the first domain letter. Basic
   runes have one domain, but a dual-domain rune would need a choice.
-- **The Hidden / facedown zone** exists but nothing uses it yet (the Master Yi deck
-  will need it).
+- **Hidden cards.** A card hidden on turn N can be played from turn N+1 (the turn counter
+  counts both players' turns). The opponent sees that a battlefield's facedown zone is
+  occupied, never what is there; the log only names the card once it's played or
+  removed (421.4).
 
 ### Engine and API design
 - **Auto-passing.** `step()` passes priority, passes focus, ends the turn or assigns
@@ -99,8 +127,12 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   rejects runes in `"Main Board"`. Decklists exported from other sites may need to be
   split by hand.
 - **Card data** comes from `import_sheet.py`. The sheet has one domain column, so
-  dual-domain cards need `OVERRIDES`. Only the Kai'Sa deck's cards are in
-  `card_data/`.
+  dual-domain cards need `OVERRIDES`. Its "Origins" tab has **no Power column**, so every
+  new card's Power cost is an `OVERRIDES` entry (checked against riftbound.gg's card
+  database). A card imported from that tab without one silently costs no Power. Cards
+  with errata (Zhonya's Hourglass, Dazzling Aurora, The Dreaming Tree, Annie's legend) get
+  their current text there too. `card_data/kaisa_deck.json` is the "Kaisa Deck" tab;
+  `origins_meta.json` holds the rest of the meta decks' cards (`--decks` import).
 - **Test setup must be reachable.** Tests build positions by hand. A position
   that couldn't happen in a real game (units on an uncontrolled battlefield outside
   a showdown, damage left over from an earlier turn) makes the engine do surprising
@@ -121,7 +153,14 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   embedding. Never re-sort it.
 - **Changing the encoding breaks checkpoints.** `TOKEN_FEATURES`, `GLOBAL_FEATURES` and
   `ACTION_FEATURES` fix the input sizes. Adding a feature means retraining (or copying
-  weights by hand).
+  weights by hand). The 2026-09-29 changes did this: `kaisa-v1` no longer loads.
+- **One policy for every deck.** The model has no deck input; it learns which deck it
+  is piloting from its legend, champion and cards. A matchup win rate from `matchups.py`
+  therefore measures the decks under one shared (and still weak) pilot.
+- **Private decisions.** When a player picks from cards only they can see (Stacked Deck,
+  discarding), the other player's observation has the decision's `count` but empty
+  `options`. The encoder adds a token (zone `choice`) for each option card that isn't
+  already on the board.
 - **Encoding reads only the observation.** It must never take anything from `Game`
   directly; `test_encoding_never_depends_on_hidden_information` swaps the opponent's
   hand with their deck and checks the encoding doesn't change.
@@ -137,6 +176,54 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   300 random games.
 
 ---
+
+## 2026-09-29: Annie, Master Yi and Miss Fortune; multi-deck training
+
+The three next-best Origins decks after Kai'Sa on riftbound.gg's final Origins tier list
+(2025-12-27), from the same "Best Origins" series as the Kai'Sa list: `decks/annie.json`,
+`decks/master_yi.json`, `decks/miss_fortune.json`. 48 new cards in
+`card_data/origins_meta.json`, all scripted.
+
+- **Card data:** `import_sheet.py --decks` imports only the cards a set of decklists uses.
+  Power costs and errata come from `OVERRIDES` (see Known pitfalls).
+- **Rules added:**
+  - Hidden and the Hide action (421, 811): pay [A] to hide at a battlefield you control;
+    from the next turn it plays for [0] with Reaction, choosing targets and its location
+    at that battlefield (811.1.d). Facedown cards go to the trash when their controller
+    loses the battlefield (107.3.d, 323.7).
+  - Ganking (810, 144.4.c), including granted Ganking. Standard Moves now also combine
+    units from different origins (144.3.b).
+  - Activated abilities (376-381) on units, gear and legends, with Energy, Power,
+    exhaust and "recycle from your trash" costs.
+  - Choices made on resolution (355.17): scripts return an `Ask`, which becomes a
+    Decision of kind `"resolve"`. Look at the top 3, discard, reveal a hand and pick,
+    pay any amount, where a played unit enters.
+  - The Ending Step (317.1) with "at the end of your turn" triggers, then the Expiration
+    Step, which also clears stuns (423.1.a.2).
+  - Counter (425), stun (423), Shield (814), Tank (815) in damage assignment, gear
+    (recalled from battlefields in cleanups, 457.1), kill instructions (428),
+    discard (422), reveal (424), "I enter ready" (369.3), playing units to open or
+    occupied enemy battlefields (170.11, 355.2.b), effects that play units (419.3).
+  - Replacement effects on death (367, 373): Zhonya's Hourglass.
+  - Victory score raised by Aspirant's Climb; Vilemaw's Lair blocks moves to base,
+    standard or not (359.3.e.6).
+  - New trigger events: `chosen` (383.4.b), `move`, `killed`, `leaves`, `discard`,
+    `end_turn`, plus once-per-turn triggers ("the first time", 383.1).
+- **Engine API:** `Game.units()` no longer includes gear at a battlefield. New public
+  helpers for scripts (`move_units`, `kill`, `discard`, `counter`, `play_unit`, ...).
+  `observation()` takes `victory_score` from the game, has `stunned`/`hidden_turn` on
+  objects, and decisions with `count` (options hidden from the other player when
+  private). `load_deck(s)` and `DECK_NAMES` load decks by name.
+- **RL:** encoding features for stuns, granted Ganking, hidden cards and resolve
+  decisions; HIDE and ACTIVATE action kinds. `RiftboundEnv.reset(seed, decks)`. `ppo.py`
+  trains one policy on every pairing of `--decks` (all 10 by default, cycled evenly,
+  both seat orders) and logs self-play results per pairing. New `matchups.py` plays
+  every pairing and prints a win-rate matrix with 95% intervals.
+- **Sim:** `--decks yours,theirs`.
+- `GreedyAgent` knows the new spells, uses abilities and hides cards.
+- **Tests:** `test_origins.py` (46 tests: every new mechanic and card, random games
+  in every pairing checking card conservation and hidden information). The env tests
+  now run on all pairings and check the opponent's facedown cards don't leak.
 
 ## 2026-09-24: Agents in the sim no longer see Concede
 

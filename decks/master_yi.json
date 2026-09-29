@@ -1,0 +1,43 @@
+{
+  "metadata": {
+    "name": "Best Origins Yi",
+    "author": "Den",
+    "source": "https://riftbound.gg/riftbound-meta-tier-list-best-decks-for-origins/ (deck best-origins-yi)"
+  },
+  "deck": {
+    "Main Board": [
+      { "id": "OGN-043", "count": 3 },
+      { "id": "OGN-045", "count": 3 },
+      { "id": "OGN-047", "count": 3 },
+      { "id": "OGN-050", "count": 2 },
+      { "id": "OGN-058", "count": 2 },
+      { "id": "OGN-064", "count": 1 },
+      { "id": "OGN-075", "count": 3 },
+      { "id": "OGN-077", "count": 3 },
+      { "id": "OGN-082", "count": 2 },
+      { "id": "OGN-128", "count": 1 },
+      { "id": "OGN-134", "count": 3 },
+      { "id": "OGN-138", "count": 3 },
+      { "id": "OGN-142", "count": 2 },
+      { "id": "OGN-156", "count": 1 },
+      { "id": "OGN-158", "count": 1 },
+      { "id": "OGN-160", "count": 3 },
+      { "id": "OGN-161", "count": 3 },
+      { "id": "OGN-276", "count": 1 },
+      { "id": "OGN-284", "count": 1 },
+      { "id": "OGN-295", "count": 1 },
+      { "id": "OGS-009", "count": 1 },
+      { "id": "OGS-019", "count": 1 }
+    ],
+    "Rune Deck": [
+      { "id": "OGN-042", "count": 6 },
+      { "id": "OGN-126", "count": 6 }
+    ],
+    "Side Board": [
+      { "id": "OGN-044", "count": 3 },
+      { "id": "OGN-052", "count": 3 },
+      { "id": "OGN-064", "count": 1 },
+      { "id": "OGN-156", "count": 1 }
+    ]
+  }
+}

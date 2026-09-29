@@ -1,0 +1,803 @@
+[
+  {
+    "card_id": "OGN-179",
+    "short_name": "Acceptable Losses",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "P"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Each player kills one of their gear.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b2b470bab1ae511ab9de0b1ce576e2050532a081-744x1039.png",
+    "energy": 1
+  },
+  {
+    "card_id": "OGN-276",
+    "short_name": "Aspirant's Climb",
+    "types": [
+      "battlefield"
+    ],
+    "rules_text": "Increase the points needed to win the game by 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/9301593f3800e68427469d38181b578a672473c3-1038x744.png"
+  },
+  {
+    "card_id": "OGN-126",
+    "short_name": "Body Rune",
+    "types": [
+      "rune"
+    ],
+    "domains": [
+      "O"
+    ],
+    "rules_text": "[E]: [Reaction] — Add [1]. Recycle this: [Reaction] — Add [C].",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/3b3c3c07626d6180457c849047e0228dc0d19539-744x1039.png"
+  },
+  {
+    "card_id": "OGN-268",
+    "short_name": "Bullet Time",
+    "types": [
+      "spell"
+    ],
+    "supertypes": [
+      "signature"
+    ],
+    "tags": [
+      "Miss Fortune"
+    ],
+    "champion_tag": "Miss Fortune",
+    "domains": [
+      "O",
+      "P"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Pay any amount of [A] to deal that much damage to all enemy units at a battlefield.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/96ed7f6b121a7f46003534393350838efe2776f0-744x1039.png",
+    "energy": 1
+  },
+  {
+    "card_id": "OGN-042",
+    "short_name": "Calm Rune",
+    "types": [
+      "rune"
+    ],
+    "domains": [
+      "G"
+    ],
+    "rules_text": "[E]: [Reaction] — Add [1]. Recycle this: [Reaction] — Add [C].",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0a0e8c3d16c2595e2f8efcc2b1466226539b506c-744x1039.png"
+  },
+  {
+    "card_id": "OGN-138",
+    "short_name": "Catalyst of Aeons",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "O"
+    ],
+    "rules_text": "Channel 2 runes exhausted. If you couldn't channel 2 runes this way, draw 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/4753707323ab6f9ac572c097f29f2f76ac62f54f-744x1039.png",
+    "energy": 4
+  },
+  {
+    "card_id": "OGN-128",
+    "short_name": "Challenge",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "O"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Choose a friendly unit and an enemy unit. They deal damage equal to their Mights to each other.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f5c1aeaee373c481b7ea2a638cd6f9e815ac105d-744x1039.png",
+    "energy": 2,
+    "power": "1O"
+  },
+  {
+    "card_id": "OGN-166",
+    "short_name": "Chaos Rune",
+    "types": [
+      "rune"
+    ],
+    "domains": [
+      "P"
+    ],
+    "rules_text": "[E]: [Reaction] — Add [1]. Recycle this: [Reaction] — Add [C].",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/daf23b0deaa5e1a5a5d310b59e9ad25d1bd70363-744x1039.png"
+  },
+  {
+    "card_id": "OGN-043",
+    "short_name": "Charm",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "G"
+    ],
+    "rules_text": "Move an enemy unit.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/62ae564505db8fcba70605eac2083ac2d4397b5a-744x1039.png",
+    "energy": 1,
+    "power": "1G"
+  },
+  {
+    "card_id": "OGN-160",
+    "short_name": "Dazzling Aurora",
+    "types": [
+      "gear"
+    ],
+    "domains": [
+      "O"
+    ],
+    "rules_text": "At the end of your turn, reveal cards from the top of your Main Deck until you reveal a unit and banish it. Play it, ignoring its cost, and recycle the rest.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/c023856a50c75058465f283d181277ce265ba108-744x1039.png",
+    "energy": 9,
+    "power": "2O"
+  },
+  {
+    "card_id": "OGN-161",
+    "short_name": "Deadbloom Predator",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Shadow Isles"
+    ],
+    "domains": [
+      "O"
+    ],
+    "keywords": {
+      "Deflect": null
+    },
+    "rules_text": "[Deflect] (Opponents must pay [A] to choose me with a spell or ability.) You may play me to an occupied enemy battlefield.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/112b4b3847b26ea2d245ac0976717d109be7b032-744x1039.png",
+    "energy": 8,
+    "might": 8,
+    "power": "2O"
+  },
+  {
+    "card_id": "OGN-045",
+    "short_name": "Defy",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "G"
+    ],
+    "keywords": {
+      "Reaction": null
+    },
+    "rules_text": "[Reaction] (Play any time, even before spells and abilities resolve.) Counter a spell that costs no more than [4] and no more than [A].",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/4989bfcc4bd7be77051f0c2c349a981ba9c273e0-744x1039.png",
+    "energy": 1,
+    "power": "1G"
+  },
+  {
+    "card_id": "OGN-058",
+    "short_name": "Discipline",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "G"
+    ],
+    "keywords": {
+      "Reaction": null
+    },
+    "rules_text": "[Reaction] (Play any time, even before spells and abilities resolve.) Give a unit +2 Might this turn. Draw 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8b9613970b505e3ad6abe2d51d091778314a7d48-744x1039.png",
+    "energy": 2
+  },
+  {
+    "card_id": "OGN-168",
+    "short_name": "Fight or Flight",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "P"
+    ],
+    "keywords": {
+      "Hidden": null,
+      "Action": null
+    },
+    "rules_text": "[Hidden] (Hide now for [A] to react with later for [0].) [Action] (Play on your turn or in showdowns.) Move a unit from a battlefield to its base.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/2c3d543ab6c3809f45f3e410d59d376b4bee6de7-744x1039.png",
+    "energy": 2
+  },
+  {
+    "card_id": "OGN-047",
+    "short_name": "Find Your Center",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "G"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) If an opponent's score is within 3 points of the Victory Score, this costs [2] less.Draw 1 and channel 1 rune exhausted.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/cd9d798b496fdce133c5b0106d636a230b6e7ebe-744x1039.png",
+    "energy": 3
+  },
+  {
+    "card_id": "OGN-169",
+    "short_name": "Gust",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "P"
+    ],
+    "keywords": {
+      "Reaction": null
+    },
+    "rules_text": "[Reaction] (Play any time, even before spells and abilities resolve.) Return a unit at a battlefield with 3 Might or less to its owner's hand.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/dfd3b161ab76ba0c5d503384f1289b3395434b10-744x1039.png",
+    "energy": 1
+  },
+  {
+    "card_id": "OGN-201",
+    "short_name": "Invert Timelines",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "P"
+    ],
+    "rules_text": "Each player discards their hand, then draws 4.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b916326fdcf61af4630d953c7540a4aa97e6db01-744x1039.png",
+    "energy": 3,
+    "power": "1P"
+  },
+  {
+    "card_id": "OGN-192",
+    "short_name": "Mindsplitter",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Dragon",
+      "Mount Targon"
+    ],
+    "domains": [
+      "P"
+    ],
+    "rules_text": "When you play me, choose an opponent. They reveal their hand. Choose a card from it, and they discard that card.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8753058698cff6455da6cccd13a7fe901a164051-744x1039.png",
+    "energy": 7,
+    "might": 7,
+    "power": "2P"
+  },
+  {
+    "card_id": "OGN-267",
+    "short_name": "Miss Fortune",
+    "subtitle": "Bounty Hunter",
+    "types": [
+      "legend"
+    ],
+    "tags": [
+      "Miss Fortune"
+    ],
+    "champion_tag": "Miss Fortune",
+    "domains": [
+      "O",
+      "P"
+    ],
+    "rules_text": "[E]: Give a unit [Ganking] this turn. (It can move from battlefield to battlefield.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e0635cebc3dd8ee5355dbbc090ca27ebeacebad7-744x1039.png"
+  },
+  {
+    "card_id": "OGN-162",
+    "short_name": "Miss Fortune",
+    "subtitle": "Captain",
+    "types": [
+      "unit"
+    ],
+    "supertypes": [
+      "champion"
+    ],
+    "tags": [
+      "Pirate",
+      "Miss Fortune",
+      "Bilgewater"
+    ],
+    "champion_tag": "Miss Fortune",
+    "domains": [
+      "O"
+    ],
+    "keywords": {
+      "Accelerate": null,
+      "Ganking": null
+    },
+    "rules_text": "[Accelerate] (You may pay [1][O] as an additional cost to have me enter ready.) [Ganking] (I can move from battlefield to battlefield.) The first time I move each turn, you may ready something else that's exhausted.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/3c7b219245cd6c6ee835974dd74771bc605289de-744x1039.png",
+    "energy": 5,
+    "might": 5,
+    "power": "1O"
+  },
+  {
+    "card_id": "OGN-134",
+    "short_name": "Mobilize",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "O"
+    ],
+    "rules_text": "Channel 1 rune exhausted. If you can't, draw 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/cb22153e84ce250192b8e6e75e7f4dc0b66a728c-744x1039.png",
+    "energy": 2
+  },
+  {
+    "card_id": "OGN-142",
+    "short_name": "Mountain Drake",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Dragon"
+    ],
+    "domains": [
+      "O"
+    ],
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8a9c1d334b217e9bd0b23dfca2054de4d0b90ff1-744x1039.png",
+    "energy": 9,
+    "might": 10
+  },
+  {
+    "card_id": "OGN-284",
+    "short_name": "Obelisk of Power",
+    "types": [
+      "battlefield"
+    ],
+    "rules_text": "At the start of each player's first Beginning Phase, that player channels 1 rune.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/649437d1dec8abcaae4fbbef64f06b8b679a8c2f-1038x744.png"
+  },
+  {
+    "card_id": "OGN-154",
+    "short_name": "Primal Strength",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "O"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Give a unit +7 Might this turn.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/dfd910a9836cd36340d0ffdb5fe8cb92a1069963-744x1039.png",
+    "energy": 4,
+    "power": "1O"
+  },
+  {
+    "card_id": "OGN-172",
+    "short_name": "Rebuke",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "P"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Return a unit at a battlefield to its owner's hand.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/c8e1ad72e9d562f9267c1512f29e9c04dc5cc15f-744x1039.png",
+    "energy": 2,
+    "power": "2P"
+  },
+  {
+    "card_id": "OGN-173",
+    "short_name": "Ride the Wind",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "P"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Move a friendly unit and ready it.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/864d9f8992db7f9a9e795d9438d941ca564ddde7-744x1039.png",
+    "energy": 2,
+    "power": "1P"
+  },
+  {
+    "card_id": "OGN-050",
+    "short_name": "Rune Prison",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "G"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Stun a unit. (It doesn't deal combat damage this turn.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/21867baeaced3c22cda5f40f6b6c9a8dad4b7042-744x1039.png",
+    "energy": 2,
+    "power": "1G"
+  },
+  {
+    "card_id": "OGN-156",
+    "short_name": "Sabotage",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "O"
+    ],
+    "rules_text": "Choose an opponent. They reveal their hand. Choose a non-unit card from it, and recycle that card.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/70f186b85fd224ee23dcf64957f0fab835d28040-744x1039.png",
+    "energy": 1,
+    "power": "1O"
+  },
+  {
+    "card_id": "OGN-182",
+    "short_name": "Scrapheap",
+    "types": [
+      "gear"
+    ],
+    "domains": [
+      "P"
+    ],
+    "rules_text": "When this is played, discarded, or killed, draw 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/198088dda16a95186a597433c3a62e8d982e666c-744x1039.png",
+    "energy": 2
+  },
+  {
+    "card_id": "OGN-176",
+    "short_name": "Sneaky Deckhand",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Pirate",
+      "Bilgewater"
+    ],
+    "domains": [
+      "P"
+    ],
+    "rules_text": "You may play me to an open battlefield.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/6f95b6aac293d8e477192281df47d8466da502bf-744x1039.png",
+    "energy": 3,
+    "might": 2
+  },
+  {
+    "card_id": "OGN-196",
+    "short_name": "Soulgorger",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Spirit",
+      "Shadow Isles"
+    ],
+    "domains": [
+      "P"
+    ],
+    "rules_text": "When you play me, you may play a unit from your trash, ignoring its Energy cost. (You must still pay its Power cost.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/439c4fa7c8c47cba41df8bce3fe3c8068d297382-744x1039.png",
+    "energy": 8,
+    "might": 5,
+    "power": "2P"
+  },
+  {
+    "card_id": "OGN-183",
+    "short_name": "Stacked Deck",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "P"
+    ],
+    "keywords": {
+      "Action": null
+    },
+    "rules_text": "[Action] (Play on your turn or in showdowns.) Look at the top 3 cards of your Main Deck. Put 1 into your hand and recycle the rest.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/fdcb22cb620a4c1c37920d6b744edb615647cbd4-744x1039.png",
+    "energy": 1
+  },
+  {
+    "card_id": "OGN-075",
+    "short_name": "Tasty Faefolk",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Fae",
+      "Bandle City"
+    ],
+    "domains": [
+      "G"
+    ],
+    "keywords": {
+      "Accelerate": null,
+      "Deathknell": null
+    },
+    "rules_text": "[Accelerate] (You may pay [1][G] as an additional cost to have me enter ready.) [Deathknell] — Channel 2 runes exhausted and draw 1. (When I die, get the effect.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/65f69ca9a1087deb12e91fb6fdee7b6efd0c088f-744x1039.png",
+    "energy": 7,
+    "might": 6
+  },
+  {
+    "card_id": "OGN-292",
+    "short_name": "The Dreaming Tree",
+    "types": [
+      "battlefield"
+    ],
+    "rules_text": "When a player chooses a friendly unit here with a spell for the first time each turn, they draw 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/82a30070a1461db889539b4b4b3c678990e19b6c-1038x744.png"
+  },
+  {
+    "card_id": "OGN-185",
+    "short_name": "Traveling Merchant",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Bilgewater"
+    ],
+    "domains": [
+      "P"
+    ],
+    "rules_text": "When I move, discard 1, then draw 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/b7dbebe2bf5691391c8e4146e478b8bd2ac40aef-744x1039.png",
+    "energy": 2,
+    "might": 2
+  },
+  {
+    "card_id": "OGN-186",
+    "short_name": "Treasure Trove",
+    "types": [
+      "gear"
+    ],
+    "domains": [
+      "P"
+    ],
+    "rules_text": "When this leaves the board, draw 1 and channel 1 rune exhausted.Chaos, [E]: Kill this.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/682f5ee828ede4dbaf428cd0666db64ee8bae722-744x1039.png",
+    "energy": 2
+  },
+  {
+    "card_id": "OGN-036",
+    "short_name": "Vi",
+    "subtitle": "Destructive",
+    "types": [
+      "unit"
+    ],
+    "supertypes": [
+      "champion"
+    ],
+    "tags": [
+      "Vi",
+      "Piltover"
+    ],
+    "champion_tag": "Vi",
+    "domains": [
+      "R"
+    ],
+    "keywords": {
+      "Ganking": null
+    },
+    "rules_text": "[Ganking] (I can move from battlefield to battlefield.) Recycle 1 from your trash: Give me +1 Might this turn.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/7ab52254ac49b8853fc7ae65b03aaee3f8c5994a-744x1039.png",
+    "energy": 2,
+    "might": 3,
+    "power": "1R"
+  },
+  {
+    "card_id": "OGN-295",
+    "short_name": "Vilemaw's Lair",
+    "types": [
+      "battlefield"
+    ],
+    "rules_text": "Units can't move from here to base.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/f374b90a0bec11a5f423e7d4ebd869ab1a146471-1038x744.png"
+  },
+  {
+    "card_id": "OGN-158",
+    "short_name": "Volibear",
+    "subtitle": "Imposing",
+    "types": [
+      "unit"
+    ],
+    "supertypes": [
+      "champion"
+    ],
+    "tags": [
+      "Volibear",
+      "Freljord"
+    ],
+    "champion_tag": "Volibear",
+    "domains": [
+      "O"
+    ],
+    "keywords": {
+      "Shield": 3,
+      "Tank": null
+    },
+    "rules_text": "[Shield 3] (+3 Might while I'm a defender.) [Tank] (I must be assigned combat damage first.) When an opponent moves to a battlefield other than mine, draw 1. (Bases are not battlefield.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/bcb15f95f4a72f8b070a3b1cd54e6482fe1a4b3e-744x1039.png",
+    "energy": 12,
+    "might": 10,
+    "power": "2O"
+  },
+  {
+    "card_id": "OGN-082",
+    "short_name": "Whiteflame Protector",
+    "types": [
+      "unit"
+    ],
+    "tags": [
+      "Dragon",
+      "Mount Targon"
+    ],
+    "domains": [
+      "G"
+    ],
+    "rules_text": "When you play me, give a unit +8 Might this turn.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/a5cdd793736f915fa1b4ea388af66de7b2bc00cb-744x1039.png",
+    "energy": 8,
+    "might": 8,
+    "power": "2G"
+  },
+  {
+    "card_id": "OGN-064",
+    "short_name": "Wind Wall",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "G"
+    ],
+    "keywords": {
+      "Reaction": null
+    },
+    "rules_text": "[Reaction] (Play any time, even before spells and abilities resolve.) Counter a spell.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/72c4dbe48d06916c847dab40340e5f05228fadfe-744x1039.png",
+    "energy": 3,
+    "power": "2G"
+  },
+  {
+    "card_id": "OGN-298",
+    "short_name": "Zaun Warrens",
+    "types": [
+      "battlefield"
+    ],
+    "rules_text": "When you conquer here, discard 1, then draw 1.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/458ee40086c77b43b98c2decbaf33a4aa2359bb9-1038x744.png"
+  },
+  {
+    "card_id": "OGN-077",
+    "short_name": "Zhonya's Hourglass",
+    "types": [
+      "gear"
+    ],
+    "domains": [
+      "G"
+    ],
+    "keywords": {
+      "Hidden": null
+    },
+    "rules_text": "[Hidden] (Hide now for [A] to react with later for [0].) If a friendly unit would die, kill this instead. Heal that unit, exhaust it, and recall it. (Send it to base. This isn't a move.)",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/dc38172c56f838b407fc9f170ba973da32d7cd4d-744x1039.png",
+    "energy": 2
+  },
+  {
+    "card_id": "OGS-017",
+    "short_name": "Annie",
+    "subtitle": "Dark Child",
+    "types": [
+      "legend"
+    ],
+    "tags": [
+      "Annie"
+    ],
+    "champion_tag": "Annie",
+    "domains": [
+      "R",
+      "P"
+    ],
+    "rules_text": "At the end of your turn, ready up to 2 runes.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/89963e1d1cffd69c620fb5d6b037f50d5c334463-744x1039.png"
+  },
+  {
+    "card_id": "OGS-010",
+    "short_name": "Annie",
+    "subtitle": "Stubborn",
+    "types": [
+      "unit"
+    ],
+    "supertypes": [
+      "champion"
+    ],
+    "tags": [
+      "Annie",
+      "Noxus"
+    ],
+    "champion_tag": "Annie",
+    "domains": [
+      "P"
+    ],
+    "rules_text": "When you play me, return a spell from your trash to your hand.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/44eb968cf0c54e75970588b69eef5c5f5ccc9b24-744x1039.png",
+    "energy": 4,
+    "might": 3,
+    "power": "1P"
+  },
+  {
+    "card_id": "OGS-011",
+    "short_name": "Flash",
+    "types": [
+      "spell"
+    ],
+    "domains": [
+      "P"
+    ],
+    "keywords": {
+      "Reaction": null
+    },
+    "rules_text": "[Reaction] (Play any time, even before spells and abilities resolve.) Move up to 2 friendly units to base.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/4d9cc1c13b75933e509e642213f13359350cd3f9-744x1039.png",
+    "energy": 2
+  },
+  {
+    "card_id": "OGS-019",
+    "short_name": "Master Yi",
+    "subtitle": "Wuju Bladesman",
+    "types": [
+      "legend"
+    ],
+    "tags": [
+      "Master Yi"
+    ],
+    "champion_tag": "Master Yi",
+    "domains": [
+      "G",
+      "O"
+    ],
+    "rules_text": "While a friendly unit defends alone, it gets +2 Might.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8231ced23eaf22ca3bf62ec8cb86b83a3e222da6-744x1039.png"
+  },
+  {
+    "card_id": "OGS-009",
+    "short_name": "Master Yi",
+    "subtitle": "Honed",
+    "types": [
+      "unit"
+    ],
+    "supertypes": [
+      "champion"
+    ],
+    "tags": [
+      "Master Yi",
+      "Ionia"
+    ],
+    "champion_tag": "Master Yi",
+    "domains": [
+      "O"
+    ],
+    "keywords": {
+      "Ganking": null
+    },
+    "rules_text": "[Ganking] (I can move from battlefield to battlefield.) I enter ready.",
+    "art_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0e16976cd6d7ee5a874be9351b428671990fbd25-744x1039.png",
+    "energy": 7,
+    "might": 6,
+    "power": "1O"
+  }
+]

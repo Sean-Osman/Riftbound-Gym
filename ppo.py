@@ -1,6 +1,7 @@
-"""PPO self-play on the Kai'Sa mirror.
+"""PPO self-play over a pool of decks.
 
-    python3 ppo.py --run kaisa-v1                   # train (Ctrl-C is safe: latest.pt is saved each iteration)
+    python3 ppo.py --run meta-v1                    # all four meta decks, every pairing (the default)
+    python3 ppo.py --run kaisa-v1 --decks kaisa     # the Kai'Sa mirror only
     python3 ppo.py --run kaisa-v1 --resume          # continue a run
     python3 ppo.py --run smoke --iterations 2 --games 8 --workers 2 --eval-games 8   # quick check
     python3 sim.py --agent ppo:PPOAgent             # play the newest checkpoint in the browser
@@ -9,6 +10,11 @@ The policy scores every legal action (see env.py), so the action space can be an
 size. Each iteration, rollout workers play `--games` games and send back the
 learner's decisions with advantages already computed; the learner then does a
 few epochs of clipped PPO on them.
+
+One policy plays every deck: it sees its own legend and cards in the encoding.
+Each game gets a pairing of `--decks` (every pair including mirrors, cycled so
+they come up equally often) with the seats' decks alternating, so every deck
+gets played from both sides of every matchup.
 
 Opponents (per game): the current policy against itself (both seats are
 training data), a saved past version from the pool (only the learner's seat is
@@ -40,15 +46,16 @@ import torch.nn.functional as F
 from agents import GreedyAgent
 from env import (ACTION_DIM, GLOBAL_DIM, N_POINTERS, TOKEN_DIM, CardVocab, Encoded, Encoder,
                  RiftboundEnv)
-from game import ROOT, Action, ActionKind, RandomAgent
+from game import DECK_NAMES, ROOT, Action, ActionKind, RandomAgent, load_decks
 
 CHECKPOINTS = ROOT / "checkpoints"
 
 
 @dataclass
 class Config:
-    run: str = "kaisa-mirror"
+    run: str = "meta"
     seed: int = 0
+    decks: str = ",".join(DECK_NAMES)   # decks/<name>.json, comma-separated
     iterations: int = 1000
     games: int = 64                 # games per iteration
     workers: int = max(1, (os.cpu_count() or 2) - 1)   # 0 plays in this process
@@ -77,6 +84,14 @@ class Config:
     eval_every: int = 10
     eval_games: int = 100
     device: str = "auto"            # for the learner; rollouts always run on CPU
+
+    def deck_names(self) -> list[str]:
+        return [d.strip() for d in self.decks.split(",") if d.strip()]
+
+    def pairings(self) -> list[tuple[str, str]]:
+        """Every pair of decks, mirrors included, each once."""
+        names = self.deck_names()
+        return [(a, b) for i, a in enumerate(names) for b in names[i:]]
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +237,7 @@ class GameSpec:
     seed: int
     opponent: str           # "self", "greedy", "random" or a pool checkpoint path
     learner: int            # the learner's seat (both seats learn in self-play)
+    decks: tuple[str, str]  # seat 0's deck, seat 1's deck
     record: bool = True     # False for evaluation games
     greedy: bool = False    # learner picks its most likely action (evaluation)
 
@@ -234,6 +250,7 @@ def _init_worker(cfg: dict[str, Any], vocab: list[str]) -> None:
     c = Config(**cfg)
     v = CardVocab(vocab)
     _worker.update(cfg=c, vocab=v, model=build_model(c, v).eval(), pool={},
+                   decks=load_decks(tuple(c.deck_names())),
                    env=RiftboundEnv(vocab=v, max_decisions=c.max_decisions))
 
 
@@ -254,9 +271,10 @@ def _run_games(weights: dict[str, np.ndarray], specs: list[GameSpec]) -> list[di
     cfg: Config = _worker["cfg"]
     env: RiftboundEnv = _worker["env"]
     results = []
+    decks = _worker["decks"]
     for spec in specs:
         rng = np.random.default_rng(spec.seed)
-        env.reset(spec.seed)
+        env.reset(spec.seed, [decks[spec.decks[0]], decks[spec.decks[1]]])
         players: list[Any] = [model, model]
         other = 1 - spec.learner
         if spec.opponent == "greedy":
@@ -288,7 +306,8 @@ def _run_games(weights: dict[str, np.ndarray], specs: list[GameSpec]) -> list[di
             samples += traj
         results.append({"opponent": spec.opponent if spec.opponent in ("self", "greedy", "random") else "pool",
                         "reward": env.reward(spec.learner), "decisions": env.decisions,
-                        "truncated": env.truncated, "samples": samples})
+                        "truncated": env.truncated, "samples": samples, "decks": spec.decks,
+                        "learner": spec.learner, "winner": env.winner})
     return results
 
 
@@ -362,9 +381,13 @@ class Trainer:
     def _specs(self) -> list[GameSpec]:
         cfg = self.cfg
         pool = sorted(self.pool_dir.glob("*.pt"))[-cfg.pool_size:]
+        pairings = cfg.pairings()
         specs = []
         for k in range(cfg.games):
-            seed = (cfg.seed * 1_000_003 + self.iteration * cfg.games + k) % (1 << 31)
+            n = self.iteration * cfg.games + k
+            seed = (cfg.seed * 1_000_003 + n) % (1 << 31)
+            a, b = pairings[n % len(pairings)]
+            decks = (a, b) if (n // len(pairings)) % 2 == 0 else (b, a)
             roll = self.rng.random()
             if roll < cfg.greedy_frac:
                 opponent = "greedy"
@@ -372,14 +395,20 @@ class Trainer:
                 opponent = str(self.rng.choice(pool))
             else:
                 opponent = "self"
-            specs.append(GameSpec(seed, opponent, learner=k % 2))
+            specs.append(GameSpec(seed, opponent, learner=k % 2, decks=decks))
         return specs
 
     def evaluate(self, games: int | None = None) -> dict[str, float]:
         """Win rate of the greedy (argmax) policy against the scripted agents,
         alternating seats. Evaluation seeds never overlap training seeds."""
         games = games or self.cfg.eval_games
-        specs = [GameSpec(10**9 + k, opp, learner=k % 2, record=False, greedy=True)
+        pairings = self.cfg.pairings()
+
+        def decks(k: int) -> tuple[str, str]:
+            a, b = pairings[k % len(pairings)]
+            return (a, b) if (k // len(pairings)) % 2 == 0 else (b, a)
+
+        specs = [GameSpec(10**9 + k, opp, learner=k % 2, decks=decks(k), record=False, greedy=True)
                  for opp in ("random", "greedy") for k in range(games)]
         out: dict[str, list[float]] = {}
         for r in self._play(specs):
@@ -469,6 +498,14 @@ class Trainer:
                     rewards = [r["reward"] for r in results if r["opponent"] == opp]
                     if rewards:
                         row[f"win_vs_{opp}"] = float(np.mean([x > 0 for x in rewards]))
+                # self-play results per pairing: "deck0|deck1" -> [seat 0 wins, finished games]
+                matchups: dict[str, list[int]] = {}
+                for r in results:
+                    if r["opponent"] == "self" and r["winner"] is not None:
+                        entry = matchups.setdefault("|".join(r["decks"]), [0, 0])
+                        entry[0] += r["winner"] == 0
+                        entry[1] += 1
+                row["self_play_matchups"] = matchups
                 if self.iteration % cfg.snapshot_every == 0:
                     self.save(self.pool_dir / f"iter_{self.iteration:06d}.pt")
                 if self.iteration % cfg.eval_every == 0:

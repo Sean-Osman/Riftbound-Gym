@@ -3,6 +3,7 @@
     python3 sim.py                                  # you vs RandomAgent on http://localhost:8765
     python3 sim.py --agent my_module:MyAgent        # any class with .act(observation, legal)
     python3 sim.py --seat 1 --port 9000
+    python3 sim.py --decks annie,master_yi          # your deck, then the agent's (default: Kai'Sa mirror)
 
 Stdlib only. The server is single-threaded and the agent moves synchronously
 right after yours, so there is no locking.
@@ -18,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
-from game import ActionKind, Agent, Game, RandomAgent, load_demo_decks
+from game import DECK_NAMES, ActionKind, Agent, Game, RandomAgent, load_decks
 
 STATIC = Path(__file__).parent / "sim"
 
@@ -31,9 +32,12 @@ def load_agent(spec: str) -> Agent:
 
 
 class Session:
-    def __init__(self, agent_spec: str, human_seat: int):
+    def __init__(self, agent_spec: str, human_seat: int, decks: tuple[str, str] = ("kaisa", "kaisa")):
         self.agent_spec = agent_spec
         self.human_seat = human_seat
+        pool = load_decks(tuple(dict.fromkeys(decks)))
+        mine, theirs = pool[decks[0]], pool[decks[1]]
+        self.decks = [mine, theirs] if human_seat == 0 else [theirs, mine]
         self.new_game()
 
     def new_game(self, seed: int | None = None) -> None:
@@ -42,7 +46,7 @@ class Session:
         names = ["You", f"Agent ({self.agent.name})"]
         if self.human_seat == 1:
             names.reverse()
-        self.game = Game(list(load_demo_decks()), names, seed=self.seed, allow_concede=True)
+        self.game = Game(list(self.decks), names, seed=self.seed, allow_concede=True)
         self.run_agent()
 
     def run_agent(self) -> None:
@@ -118,8 +122,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--agent", default="random", help="'random' or module:Class")
     parser.add_argument("--seat", type=int, default=0, choices=[0, 1], help="your seat")
+    parser.add_argument("--decks", default="kaisa,kaisa",
+                        help=f"your deck and the agent's, from {', '.join(DECK_NAMES)}")
     args = parser.parse_args()
-    session = Session(args.agent, args.seat)
+    mine, _, theirs = args.decks.partition(",")
+    session = Session(args.agent, args.seat, (mine, theirs or mine))
     server = HTTPServer(("127.0.0.1", args.port), make_handler(session))
     print(f"Riftbound sim on http://localhost:{args.port}  (agent: {args.agent})")
     try:

@@ -13,8 +13,14 @@ from typing import Any
 from env import _cost
 from game import Action, ActionKind
 
-# Spells that help the unit they target; every other targeted spell hurts it.
-FRIENDLY_SPELLS = {"OGN-004", "OGN-104"}      # Cleave, Retreat
+# Spells that help the unit they target; every other targeted spell hurts it
+# (or, for counters, the enemy spell it targets).
+FRIENDLY_SPELLS = {
+    "OGN-004", "OGN-104",                     # Cleave, Retreat
+    "OGN-173", "OGS-011",                     # Ride the Wind, Flash
+    "OGN-058", "OGN-154",                     # Discipline, Primal Strength
+}
+MIXED_SPELLS = {"OGN-128"}                    # Challenge: one of mine against one of theirs
 TIME_WARP = "OGN-122"
 
 
@@ -26,6 +32,7 @@ class GreedyAgent:
     - aim harmful spells at the strongest enemy unit, helpful ones at its own
     - move units onto a battlefield when they'd win the fight (or it's empty)
     - in combat, kill as much enemy Might as possible
+    - use abilities, hide cards, and pay as much as it can for "pay any amount"
     - otherwise pass or end the turn
     """
 
@@ -44,7 +51,11 @@ class GreedyAgent:
             return 1.0 if not action.set_aside else 0.0
         if kind is ActionKind.CHOOSE:
             option = board.option(action.choice)
-            return 0.0 if option.get("declines") else 1.0
+            return 0.0 if option.get("declines") else 1.0 + option.get("amount", 0)
+        if kind is ActionKind.ACTIVATE:
+            return 3.0
+        if kind is ActionKind.HIDE:
+            return 2.0
         if kind is ActionKind.ASSIGN_DAMAGE:
             return sum(board.might.get(oid, 0) for oid, amount in action.damage
                        if amount >= board.toughness(oid))
@@ -67,7 +78,7 @@ class GreedyAgent:
             score -= 1.5 * len(pay.recycle)             # recycled runes leave the board
         if action.accelerate:
             score -= 1
-        if action.targets:
+        if action.targets and card.get("card_id") not in MIXED_SPELLS:
             friendly = card.get("card_id") in FRIENDLY_SPELLS
             for oid in action.targets:
                 mine = board.controller.get(oid) == board.me
@@ -112,6 +123,14 @@ class _Board:
             for view in bf["units"]:
                 self.cards[view["oid"]] = view
                 self.controller[view["oid"]] = view["controller"]
+            self.controller[bf["card"]["oid"]] = bf["controller"]
+            for view in bf["facedown"]["objects"]:
+                if not view.get("hidden"):
+                    self.cards[view["oid"]] = view
+                    self.controller[view["oid"]] = view["controller"]
+        for entry in obs["chain"]:
+            if "oid" in entry:
+                self.controller[entry["oid"]] = entry["chain_controller"]
 
     def enemy_might(self, index: int) -> int:
         return sum(self.might.get(v["oid"], 0) for v in self.battlefields[index]["units"]

@@ -1,0 +1,42 @@
+{
+  "metadata": {
+    "name": "Best Origins Annie",
+    "author": "Den",
+    "source": "https://riftbound.gg/riftbound-meta-tier-list-best-decks-for-origins/ (deck best-origins-annie)"
+  },
+  "deck": {
+    "Main Board": [
+      { "id": "OGN-004", "count": 3 },
+      { "id": "OGN-013", "count": 3 },
+      { "id": "OGN-024", "count": 2 },
+      { "id": "OGN-027", "count": 3 },
+      { "id": "OGN-036", "count": 3 },
+      { "id": "OGN-039", "count": 3 },
+      { "id": "OGN-168", "count": 1 },
+      { "id": "OGN-169", "count": 2 },
+      { "id": "OGN-172", "count": 1 },
+      { "id": "OGN-173", "count": 3 },
+      { "id": "OGN-176", "count": 3 },
+      { "id": "OGN-182", "count": 3 },
+      { "id": "OGN-183", "count": 3 },
+      { "id": "OGN-185", "count": 3 },
+      { "id": "OGN-290", "count": 1 },
+      { "id": "OGN-292", "count": 1 },
+      { "id": "OGN-298", "count": 1 },
+      { "id": "OGS-010", "count": 1 },
+      { "id": "OGS-011", "count": 3 },
+      { "id": "OGS-017", "count": 1 }
+    ],
+    "Rune Deck": [
+      { "id": "OGN-007", "count": 6 },
+      { "id": "OGN-166", "count": 6 }
+    ],
+    "Side Board": [
+      { "id": "OGN-028", "count": 2 },
+      { "id": "OGN-168", "count": 2 },
+      { "id": "OGN-169", "count": 1 },
+      { "id": "OGN-172", "count": 2 },
+      { "id": "OGN-180", "count": 1 }
+    ]
+  }
+}

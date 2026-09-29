@@ -10,14 +10,22 @@ import pytest
 from agents import GreedyAgent
 from env import (ACTION_DIM, GLOBAL_DIM, MAX_TOKENS, N_POINTERS, TOKEN_DIM, CardVocab, Encoder,
                  OpponentEnv, RiftboundEnv, UNKNOWN)
-from game import ActionKind, Game, RandomAgent, load_demo_decks, play_game
+from cards import load_card_pool
+from game import DECK_NAMES, ROOT, ActionKind, Game, RandomAgent, load_decks, load_demo_decks, play_game
+
+DECKS = load_decks()
+PAIRINGS = [(a, b) for i, a in enumerate(DECK_NAMES) for b in DECK_NAMES[i:]]
+
+
+def full_vocab():
+    return CardVocab.from_pool(load_card_pool(ROOT / "card_data"))
 
 
 def random_positions(n_games=5, every=7):
-    """Games mid-play, sampled every few decisions."""
-    decks = list(load_demo_decks())
+    """Games mid-play in every deck pairing, sampled every few decisions."""
     for seed in range(n_games):
-        g = Game(decks, seed=seed)
+        a, b = PAIRINGS[seed % len(PAIRINGS)]
+        g = Game([DECKS[a], DECKS[b]], seed=seed)
         rng = random.Random(seed)
         k = 0
         while not g.is_over:
@@ -63,9 +71,9 @@ def test_observation_has_what_the_encoder_needs_and_stays_json():
 
 
 def test_encoding_shapes_and_pointers():
-    enc = Encoder(CardVocab.from_pool([c.card_id for c in load_demo_decks()[0].main]))
+    enc = Encoder(full_vocab())
     seen_kinds = set()
-    for g in random_positions(5, every=3):
+    for g in random_positions(20, every=3):
         seat = g.acting_player
         legal = g.legal_actions()
         e = enc.encode(g.observation(seat), legal)
@@ -85,18 +93,24 @@ def test_encoding_shapes_and_pointers():
                 assert (p[:min(len(a.units), N_POINTERS)] >= 0).all()
         rows = {r.tobytes() + p.tobytes() for r, p in zip(e.actions, e.pointers)}
         assert len(rows) == len(legal), "two legal actions encode the same"
-    assert {ActionKind.PLAY_CARD, ActionKind.MOVE, ActionKind.END_TURN, ActionKind.MULLIGAN} <= seen_kinds
+    assert {ActionKind.PLAY_CARD, ActionKind.MOVE, ActionKind.END_TURN, ActionKind.MULLIGAN,
+            ActionKind.HIDE, ActionKind.ACTIVATE, ActionKind.CHOOSE} <= seen_kinds
 
 
 def test_encoding_never_depends_on_hidden_information():
     """Swapping the opponent's hand with their deck, and reshuffling both decks,
-    must not change what the viewer's encoding contains."""
-    enc = Encoder(CardVocab.from_pool([c.card_id for c in load_demo_decks()[0].main]))
+    must not change what the viewer's encoding contains. Neither may the identity
+    of the opponent's hidden (facedown) cards. Positions where the viewer is
+    choosing among cards of their own deck (Stacked Deck) are skipped: there the
+    deck's top is meant to be visible."""
+    enc = Encoder(full_vocab())
     checked = 0
-    for g in random_positions(5, every=5):
+    for g in random_positions(20, every=5):
         viewer = g.acting_player
         other = g.players[1 - viewer]
         if not other.hand.objects or not other.main_deck.objects:
+            continue
+        if g.decision is not None and g.decision.kind == "resolve":
             continue
         before = enc.encode(g.observation(viewer), g.legal_actions())
         h = copy.deepcopy(g)
@@ -109,6 +123,10 @@ def test_encoding_never_depends_on_hidden_information():
         rng.shuffle(o.main_deck.objects)
         rng.shuffle(h.players[viewer].main_deck.objects)
         rng.shuffle(o.rune_deck.objects)
+        for bf in h.battlefields:
+            for obj in bf.facedown:
+                if obj.controller != viewer:
+                    obj.card = o.main_deck.objects[0].card
         after = enc.encode(h.observation(viewer), h.legal_actions())
         for field in ("cards", "tokens", "mask", "glob", "actions", "pointers"):
             assert np.array_equal(getattr(before, field), getattr(after, field)), field
