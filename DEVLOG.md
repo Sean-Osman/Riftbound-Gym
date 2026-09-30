@@ -189,6 +189,13 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   wins for bigger margins. W = 0.5 makes an 8-point lead worth half a win mid-game.
 - Tests: shaped returns equal the result minus the potential at each decision, and from
   the first decision they match unshaped returns.
+- **Result (`annie-vs-yi-pts`, W = 0.5, same init and settings as `annie-vs-yi`, 120
+  iterations):** no measurable effect. Annie's head-to-head win rate, pooled over the
+  evals from iteration 20 on: 28.5% ± 1.9 with shaping vs 27.4% ± 2.0 without (real:
+  57%). Skill against GreedyAgent piloting the other deck was also unchanged (Annie agent
+  56% vs 54%, Master Yi agent 81% vs 82%). Points come soon enough after the plays that
+  earn them that the win/loss signal was already getting through; Annie's problem is
+  plays whose payoff is further away.
 
 ## 2026-09-30: Adversarial training for a single matchup (`duel.py`)
 
