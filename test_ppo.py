@@ -95,3 +95,25 @@ def test_updates_stop_early_once_kl_passes_the_target(tmp_path, monkeypatch):
     assert capped.update(samples)["update_frac"] < 1
     free = ppo.Trainer(ppo.Config(run="free", target_kl=0.0, **base))
     assert free.update(samples)["update_frac"] == 1
+
+
+def test_duel_trains_both_sides_saves_resumes_and_evaluates(tmp_path, monkeypatch):
+    import duel
+    monkeypatch.setattr(duel, "CHECKPOINTS", tmp_path)
+    cfg = ppo.Config(run="d", iterations=2, games=8, workers=1, d_model=32, layers=1, heads=2,
+                     minibatch=64, epochs=1, snapshot_every=1, eval_every=2, device="cpu")
+    duel.DuelTrainer(cfg, ("annie", "master_yi"), init=None, resume=False).train(eval_games=4)
+    lines = (tmp_path / "d" / "log.jsonl").read_text().splitlines()
+    assert len(lines) == 2 and "eval_a_win_rate" in lines[-1]
+    for deck in ("annie", "master_yi"):
+        assert len(list((tmp_path / "d" / deck / "pool").glob("*.pt"))) == 2
+        assert ppo.PPOAgent(tmp_path / "d" / deck / "latest.pt").name.endswith("#2")
+    with pytest.raises(FileExistsError):
+        duel.DuelTrainer(cfg, ("annie", "master_yi"), init=None, resume=False)
+    cfg.iterations = 3
+    trainer = duel.DuelTrainer(cfg, ("annie", "master_yi"), init=None, resume=True)
+    assert trainer.iteration == 2
+    specs = trainer._specs()                    # with snapshots, some games are against the pool
+    assert {s.a_source for s in specs} - {"live"} and {s.b_source for s in specs} - {"live"}
+    trainer.train(eval_games=4)
+    assert len((tmp_path / "d" / "log.jsonl").read_text().splitlines()) == 3

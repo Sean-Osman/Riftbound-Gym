@@ -328,6 +328,63 @@ def _gae(traj: list[Sample], reward: float, gamma: float, lam: float) -> None:
 # Training
 # ---------------------------------------------------------------------------
 
+def ppo_update(model: PolicyNet, opt: torch.optim.Optimizer, cfg: Config, samples: list[Sample],
+               iteration: int, device: torch.device) -> dict[str, float]:
+    """A few epochs of clipped PPO on one iteration's samples, stopping early once
+    a minibatch's approximate KL passes 1.5x the target."""
+    model.train()
+    stats: dict[str, list[float]] = {}
+    order = np.arange(len(samples))
+    np_rng = np.random.default_rng(iteration)
+    planned = cfg.epochs * math.ceil(len(order) / cfg.minibatch)
+    steps, stopped = 0, False
+    for _ in range(cfg.epochs):
+        if stopped:
+            break
+        np_rng.shuffle(order)
+        for start in range(0, len(order), cfg.minibatch):
+            mb = [samples[i] for i in order[start:start + cfg.minibatch]]
+            dev = device
+            batch = Batch([s.enc for s in mb], dev)
+            act = torch.tensor([s.action for s in mb], device=dev)
+            old_logp = torch.tensor([s.logp for s in mb], dtype=torch.float32, device=dev)
+            adv = torch.tensor([s.advantage for s in mb], dtype=torch.float32, device=dev)
+            ret = torch.tensor([s.ret for s in mb], dtype=torch.float32, device=dev)
+            adv = (adv - adv.mean()) / (adv.std() + 1e-8) if len(mb) > 1 else adv
+            logits, value = model(batch)
+            logp_all = F.log_softmax(logits, dim=-1)
+            logp = logp_all.gather(1, act[:, None]).squeeze(1)
+            entropy = -(logp_all.exp() * logp_all).masked_fill(~batch.action_mask, 0).sum(-1).mean()
+            ratio = (logp - old_logp).exp()
+            pg = -torch.min(ratio * adv, ratio.clamp(1 - cfg.clip, 1 + cfg.clip) * adv).mean()
+            v_loss = 0.5 * F.mse_loss(value, ret)
+            loss = pg + cfg.vf_coef * v_loss - cfg.ent_coef * entropy
+            opt.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+            opt.step()
+            steps += 1
+            with torch.no_grad():
+                kl = ((ratio - 1) - (logp - old_logp)).mean()
+                for k, v in (("policy_loss", pg), ("value_loss", v_loss), ("entropy", entropy),
+                             ("approx_kl", kl),
+                             ("clip_frac", ((ratio - 1).abs() > cfg.clip).float().mean())):
+                    stats.setdefault(k, []).append(float(v))
+            if cfg.target_kl and float(kl) > 1.5 * cfg.target_kl:
+                stopped = True                                  # the policy moved far enough
+                break
+    values = np.array([s.value for s in samples])
+    returns = np.array([s.ret for s in samples])
+    var = returns.var()
+    result = {k: float(np.mean(v)) for k, v in stats.items()}
+    result["update_frac"] = steps / planned
+    result["lr"] = opt.param_groups[0]["lr"]
+    result["explained_variance"] = float(1 - (returns - values).var() / var) if var > 0 else 0.0
+    model.eval()
+    return result
+
+
+
 class Trainer:
     def __init__(self, cfg: Config, *, resume: bool = False):
         self.cfg = cfg
@@ -416,57 +473,7 @@ class Trainer:
         return {f"eval_vs_{k}": float(np.mean(v)) for k, v in out.items()}
 
     def update(self, samples: list[Sample]) -> dict[str, float]:
-        cfg = self.cfg
-        self.model.train()
-        stats: dict[str, list[float]] = {}
-        order = np.arange(len(samples))
-        np_rng = np.random.default_rng(self.iteration)
-        planned = cfg.epochs * math.ceil(len(order) / cfg.minibatch)
-        steps, stopped = 0, False
-        for _ in range(cfg.epochs):
-            if stopped:
-                break
-            np_rng.shuffle(order)
-            for start in range(0, len(order), cfg.minibatch):
-                mb = [samples[i] for i in order[start:start + cfg.minibatch]]
-                dev = self.device
-                batch = Batch([s.enc for s in mb], dev)
-                act = torch.tensor([s.action for s in mb], device=dev)
-                old_logp = torch.tensor([s.logp for s in mb], dtype=torch.float32, device=dev)
-                adv = torch.tensor([s.advantage for s in mb], dtype=torch.float32, device=dev)
-                ret = torch.tensor([s.ret for s in mb], dtype=torch.float32, device=dev)
-                adv = (adv - adv.mean()) / (adv.std() + 1e-8) if len(mb) > 1 else adv
-                logits, value = self.model(batch)
-                logp_all = F.log_softmax(logits, dim=-1)
-                logp = logp_all.gather(1, act[:, None]).squeeze(1)
-                entropy = -(logp_all.exp() * logp_all).masked_fill(~batch.action_mask, 0).sum(-1).mean()
-                ratio = (logp - old_logp).exp()
-                pg = -torch.min(ratio * adv, ratio.clamp(1 - cfg.clip, 1 + cfg.clip) * adv).mean()
-                v_loss = 0.5 * F.mse_loss(value, ret)
-                loss = pg + cfg.vf_coef * v_loss - cfg.ent_coef * entropy
-                self.opt.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), cfg.max_grad_norm)
-                self.opt.step()
-                steps += 1
-                with torch.no_grad():
-                    kl = ((ratio - 1) - (logp - old_logp)).mean()
-                    for k, v in (("policy_loss", pg), ("value_loss", v_loss), ("entropy", entropy),
-                                 ("approx_kl", kl),
-                                 ("clip_frac", ((ratio - 1).abs() > cfg.clip).float().mean())):
-                        stats.setdefault(k, []).append(float(v))
-                if cfg.target_kl and float(kl) > 1.5 * cfg.target_kl:
-                    stopped = True                                  # the policy moved far enough
-                    break
-        values = np.array([s.value for s in samples])
-        returns = np.array([s.ret for s in samples])
-        var = returns.var()
-        result = {k: float(np.mean(v)) for k, v in stats.items()}
-        result["update_frac"] = steps / planned
-        result["lr"] = self.opt.param_groups[0]["lr"]
-        result["explained_variance"] = float(1 - (returns - values).var() / var) if var > 0 else 0.0
-        self.model.eval()
-        return result
+        return ppo_update(self.model, self.opt, self.cfg, samples, self.iteration, self.device)
 
     def save(self, path: Path) -> None:
         tmp = path.with_suffix(".tmp")

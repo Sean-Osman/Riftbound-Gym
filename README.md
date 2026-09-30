@@ -110,6 +110,8 @@ for all options), measure the matchups, then play against it:
 .venv/bin/python ppo.py --run kaisa-v2 --decks kaisa           # just the Kai'Sa mirror
 tail -f checkpoints/meta-v1/log.jsonl                          # win rates, losses, throughput
 .venv/bin/python matchups.py checkpoints/meta-v1/latest.pt     # win-rate matrix with 95% intervals
+.venv/bin/python duel.py --run annie-vs-yi --decks annie,master_yi --init checkpoints/meta-v1/latest.pt
+                                                               # one agent per deck, trained against each other
 .venv/bin/python sim.py --agent ppo:PPOAgent --decks kaisa,annie   # newest checkpoint
 ```
 
@@ -155,6 +157,7 @@ player owns their own set of zones.
 | `agents.py` | Scripted baseline agents (`GreedyAgent`) |
 | `ppo.py` | Policy network, PPO self-play trainer, `PPOAgent` |
 | `matchups.py` | Plays every deck pairing and prints a win-rate matrix |
+| `duel.py` | Adversarial training for one matchup: one policy per deck |
 | `sim.py` + `sim/index.html` | Local web UI for playing against an agent |
 | `import_sheet.py` | Converts a tab of the card spreadsheet (`.xlsx`) into card JSON |
 | `card_data/` | Card JSON loaded by `cards.load_card_pool()` |

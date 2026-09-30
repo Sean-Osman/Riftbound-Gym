@@ -177,6 +177,23 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 
 ---
 
+## 2026-09-30: Adversarial training for a single matchup (`duel.py`)
+
+- **Why:** one shared policy across all 10 pairings reproduced the real Origins matchups
+  badly (21 points off on average) and got no closer between 300 and 600 iterations. For
+  one matchup, a dedicated policy per deck, each trained against the other, is a better
+  fit: each specializes in its own deck's plan.
+- **`duel.py`:** side A pilots one deck and side B the other. Each iteration half the
+  games are current A vs current B (both learn), a quarter are current A vs a past
+  snapshot of B (only A learns) and a quarter the reverse, so neither side forgets how
+  to beat strategies the other has abandoned. Equal games and updates per side. Every
+  10 iterations: 200 head-to-head games (sampled actions) with a 95% interval, and each
+  side against GreedyAgent piloting the other deck. `--init` warm-starts both sides from
+  a `ppo.py` checkpoint; each side saves as an ordinary `ppo.py` checkpoint.
+- **`ppo.py`:** the PPO update is now the module-level `ppo_update` (shared by both
+  trainers); `Trainer.update` calls it.
+- **Test:** `test_duel_trains_both_sides_saves_resumes_and_evaluates` in `test_ppo.py`.
+
 ## 2026-09-29: Annie, Master Yi and Miss Fortune; multi-deck training
 
 The three next-best Origins decks after Kai'Sa on riftbound.gg's final Origins tier list
