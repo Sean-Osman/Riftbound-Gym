@@ -193,6 +193,20 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 - **`ppo.py`:** the PPO update is now the module-level `ppo_update` (shared by both
   trainers); `Trainer.update` calls it.
 - **Test:** `test_duel_trains_both_sides_saves_resumes_and_evaluates` in `test_ppo.py`.
+- **First run (`annie-vs-yi`, stopped at iteration 117):** both sides warm-started from
+  `meta-v1` @600. Annie's head-to-head win rate stayed at 21-30% from iteration 20 on
+  (real: 57%). Against GreedyAgent piloting the other deck, the Master Yi agent reached
+  84-88% and the Annie agent stayed at 51-58%; in mirrors against GreedyAgent both were
+  about even (46% and 54%, 80 games each). GreedyAgent piloting both sides plays this
+  matchup at 53% for Annie.
+- **Caveat for every matchup number so far:** with learning agents, a win rate mixes deck
+  strength with how easy each deck is to learn. Master Yi's plan (ramp into 8-10 Might
+  units) is easy for PPO; Annie's (tempo, bouncing units at the right moment, holding up
+  Reactions) pays off many decisions later and is learned slowly. The ramp decks looking
+  strong and Annie weak, the reverse of the real meta, fits that. Before reading a table
+  as deck strength, check it with a best-response test (freeze one side, train a fresh
+  agent only to beat it) or with search at play time, and only trust numbers that stop
+  moving as skill rises.
 
 ## 2026-09-29: Annie, Master Yi and Miss Fortune; multi-deck training
 
