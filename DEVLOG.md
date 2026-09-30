@@ -246,6 +246,26 @@ The three next-best Origins decks after Kai'Sa on riftbound.gg's final Origins t
   what a weak pilot can do with each deck than about the real matchups. Annie, Tier 1 in
   the real meta, is last here: its Hidden/Reaction tricks need skill a 300-iteration
   agent doesn't have yet.
+- **Resumed to 600 iterations** (60,000 games in all): 98% against RandomAgent, 74% against
+  GreedyAgent at the last eval. Against real Origins results it did not get closer:
+
+  | Row deck's win rate | Real | Matches | PPO @300 | PPO @600 | GreedyAgent |
+  |---|---|---|---|---|---|
+  | Kai'Sa vs Annie | 50% | 493 | 72% | 70% | 62% |
+  | Kai'Sa vs Master Yi | 45% | 431 | 43% | 38% | 54% |
+  | Kai'Sa vs Miss Fortune | 51% | 235 | 39% | 32% | 73% |
+  | Annie vs Master Yi | 57% | 254 | 28% | 36% | 53% |
+  | Annie vs Miss Fortune | 59% | 113 | 26% | 24% | 60% |
+  | Master Yi vs Miss Fortune | 48% | 99 | 77% | 74% | 86% |
+  | Mean absolute error | | | 21 pts | 21 pts | 14 pts |
+
+  "Real" is riftDecks' win-rate matrix for the Origins metagame
+  (https://riftdecks.com/stats/winrate?metagame_id=1, 8,613 reported tournament matches,
+  read 2026-09-29). Real matchups all sit between 45% and 59% and Annie was the best of
+  the four; the agent spreads the decks much further apart and makes Annie the worst.
+  The reported matches skew toward strong players and players' lists vary, so treat
+  them as a target, not ground truth. Beating GreedyAgent more often has not brought
+  the matchups closer to reality: the policy is learning some decks faster than others.
 - **Tests:** `test_origins.py` (46 tests: every new mechanic and card, random games
   in every pairing checking card conservation and hidden information). The env tests
   now run on all pairings and check the opponent's facedown cards don't leak.
