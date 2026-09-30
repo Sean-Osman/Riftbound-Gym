@@ -221,6 +221,31 @@ The three next-best Origins decks after Kai'Sa on riftbound.gg's final Origins t
   every pairing and prints a win-rate matrix with 95% intervals.
 - **Sim:** `--decks yours,theirs`.
 - `GreedyAgent` knows the new spells, uses abilities and hides cards.
+- **First training run (`meta-v1`):** 300 iterations × 100 games (30,000 self-play games,
+  about 3,000 per pairing, both seat orders). The policy ends at 97% against RandomAgent
+  and about 60% against GreedyAgent (57-70% over the last 100 iterations; each eval is
+  100 games, so ±10%). `matchups.py`, 200 games per pairing, row deck's win rate:
+
+  | PPO `meta-v1` | Kai'Sa | Annie | Master Yi | Miss Fortune |
+  |---|---|---|---|---|
+  | **Kai'Sa** | mirror | 72% | 43% | 39% |
+  | **Annie** | 28% | mirror | 28% | 26% |
+  | **Master Yi** | 57% | 72% | mirror | 77% |
+  | **Miss Fortune** | 61% | 74% | 23% | mirror |
+
+  | GreedyAgent | Kai'Sa | Annie | Master Yi | Miss Fortune |
+  |---|---|---|---|---|
+  | **Kai'Sa** | mirror | 62% | 54% | 73% |
+  | **Annie** | 38% | mirror | 53% | 60% |
+  | **Master Yi** | 46% | 47% | mirror | 86% |
+  | **Miss Fortune** | 27% | 40% | 15% | mirror |
+
+  95% intervals are about ±7 points. Both pilots agree that Master Yi beats Miss Fortune
+  and that Annie is weak against Kai'Sa. They disagree elsewhere (Miss Fortune goes from
+  worst under Greedy to beating Kai'Sa under PPO), so these numbers say more about
+  what a weak pilot can do with each deck than about the real matchups. Annie, Tier 1 in
+  the real meta, is last here: its Hidden/Reaction tricks need skill a 300-iteration
+  agent doesn't have yet.
 - **Tests:** `test_origins.py` (46 tests: every new mechanic and card, random games
   in every pairing checking card conservation and hidden information). The env tests
   now run on all pairings and check the opponent's facedown cards don't leak.
