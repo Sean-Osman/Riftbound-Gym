@@ -177,6 +177,19 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 
 ---
 
+## 2026-09-30: Reward shaping for the point lead
+
+- `--point-reward W` (`Config.point_reward`, default 0: off) in `ppo.py` and `duel.py`. Each
+  decision stores a potential, W × (my points − the opponent's) / Victory Score, read from
+  the Game (it's a reward, never a policy input). `_gae` rewards each step with the change
+  in potential, so points are credited when they're scored, not only at the end.
+- It is potential-based shaping (Ng, Harada & Russell 1999): the potential after the game
+  is 0, so over a whole game the shaping cancels and the best policy is still the one
+  that wins most. It speeds up credit assignment without teaching the agent to trade
+  wins for bigger margins. W = 0.5 makes an 8-point lead worth half a win mid-game.
+- Tests: shaped returns equal the result minus the potential at each decision, and from
+  the first decision they match unshaped returns.
+
 ## 2026-09-30: Adversarial training for a single matchup (`duel.py`)
 
 - **Why:** one shared policy across all 10 pairings reproduced the real Origins matchups

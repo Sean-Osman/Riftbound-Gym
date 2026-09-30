@@ -44,7 +44,7 @@ from env import CardVocab, RiftboundEnv
 from game import load_decks
 from matchups import wilson
 from ppo import (CHECKPOINTS, Batch, Config, PolicyNet, Sample, _gae, _pick, build_model, load_checkpoint,
-                 pick_device, ppo_update)
+                 pick_device, point_potential, ppo_update)
 
 
 @dataclass
@@ -109,7 +109,8 @@ def _run_games(weights: dict[str, dict[str, np.ndarray]], specs: list[DuelSpec])
                 logits, value = player(Batch([enc]))
                 i, logp = _pick(logits[0], rng, greedy=False)
                 if seat in learning:
-                    trajectories[seat].append(Sample(enc, i, logp, float(value[0])))
+                    trajectories[seat].append(Sample(enc, i, logp, float(value[0]),
+                                                     potential=point_potential(env, seat, cfg.point_reward)))
                 env.step(i)
         samples: dict[str, list[Sample]] = {"a": [], "b": []}
         for seat in learning:
@@ -285,6 +286,8 @@ def main() -> None:
     parser.add_argument("--games", type=int, default=100)
     parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     parser.add_argument("--lr", type=float, default=Config.lr)
+    parser.add_argument("--point-reward", type=float, default=0.0,
+                        help="shaping weight for the point lead (see ppo.py Config.point_reward)")
     parser.add_argument("--eval-every", type=int, default=10)
     parser.add_argument("--eval-games", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
@@ -296,7 +299,8 @@ def main() -> None:
     if args.init:
         base = load_checkpoint(args.init)[1]                  # keep the model's shape
     cfg = replace(base, run=args.run, seed=args.seed, iterations=args.iterations, games=args.games,
-                  workers=args.workers, lr=args.lr, eval_every=args.eval_every, decks=",".join(decks))
+                  workers=args.workers, lr=args.lr, eval_every=args.eval_every, decks=",".join(decks),
+                  point_reward=args.point_reward)
     trainer = DuelTrainer(cfg, decks, init=args.init, resume=args.resume or args.eval_only)
     if args.eval_only:
         try:

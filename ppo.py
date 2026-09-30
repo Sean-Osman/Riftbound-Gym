@@ -79,6 +79,10 @@ class Config:
     max_grad_norm: float = 0.5
     gamma: float = 1.0              # episodes are short and only the result counts
     lam: float = 0.95
+    # Shaping reward for the point lead (potential-based, so the best policy is still
+    # the one that wins most: see _gae). 0 turns it off; 0.5 makes an 8-point lead
+    # worth half a win while the game is on.
+    point_reward: float = 0.0
     max_decisions: int = 500
     # evaluation against the scripted baselines
     eval_every: int = 10
@@ -230,6 +234,18 @@ class Sample:
     value: float
     advantage: float = 0.0
     ret: float = 0.0
+    potential: float = 0.0      # point-lead shaping potential at this decision (see _gae)
+
+
+def point_potential(env: RiftboundEnv, seat: int, weight: float) -> float:
+    """Shaping potential: `weight` times the seat's point lead as a fraction of the
+    Victory Score. Read from the Game, not the observation: it is a reward, never
+    an input to the policy."""
+    if not weight:
+        return 0.0
+    g = env.game
+    lead = g.points[seat] - max(g.points[s] for s in range(len(g.points)) if s != seat)
+    return weight * lead / g.victory_score
 
 
 @dataclass
@@ -297,7 +313,8 @@ def _run_games(weights: dict[str, np.ndarray], specs: list[GameSpec]) -> list[di
                 greedy = spec.greedy and seat == spec.learner
                 i, logp = _pick(logits[0], rng, greedy)
                 if spec.record and player is model and seat in learning:
-                    trajectories[seat].append(Sample(enc, i, logp, float(value[0])))
+                    trajectories[seat].append(Sample(enc, i, logp, float(value[0]),
+                                                     potential=point_potential(env, seat, cfg.point_reward)))
                 env.step(i)
         samples = []
         for seat in learning:
@@ -312,11 +329,17 @@ def _run_games(weights: dict[str, np.ndarray], specs: list[GameSpec]) -> list[di
 
 
 def _gae(traj: list[Sample], reward: float, gamma: float, lam: float) -> None:
-    """Generalized advantage estimation over one seat's decisions. The only reward
-    is the result, after the seat's last decision."""
+    """Generalized advantage estimation over one seat's decisions. The result comes
+    after the seat's last decision. With point shaping, each step also gets
+    gamma * potential(next decision) - potential(this decision): the change in the
+    seat's point lead, credited as soon as it happens. The potential after the game
+    is 0, so over a game the shaping cancels out and the best policy is still the
+    one that wins most (potential-based shaping, Ng, Harada & Russell 1999)."""
     advantage, next_value = 0.0, 0.0
     for t in reversed(range(len(traj))):
-        r = reward if t == len(traj) - 1 else 0.0
+        last = t == len(traj) - 1
+        next_potential = 0.0 if last else traj[t + 1].potential
+        r = (reward if last else 0.0) + gamma * next_potential - traj[t].potential
         delta = r + gamma * next_value - traj[t].value
         advantage = delta + gamma * lam * advantage
         traj[t].advantage = advantage
