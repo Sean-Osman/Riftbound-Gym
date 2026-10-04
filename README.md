@@ -8,12 +8,14 @@ against each other to measure which matchups are favored and which are not. As
 a side effect, the trained agents double as practice opponents you can play
 against in the browser.
 
-> **Status: early.** The Kai'Sa mirror plays under the real rules: the turn
-> structure, runes and costs, the chain with Reactions, triggered abilities,
-> showdowns and focus, combat, scoring, and every card in the deck. Other decks'
-> cards aren't scripted yet. See [DEVLOG.md](DEVLOG.md) for what changed and the
-> known pitfalls. The RL environment and PPO self-play trainer are in place;
-> no trained agents yet.
+> **Status: early.** Four Origins meta decks play under the real rules:
+> [Kai'Sa](decks/kaisa.json), [Annie](decks/annie.json),
+> [Master Yi](decks/master_yi.json) and [Miss Fortune](decks/miss_fortune.json).
+> That covers the turn structure, runes and costs, the chain with Reactions,
+> triggered and activated abilities, Hidden, Ganking, showdowns and combat, scoring,
+> and every card in those decks. Other decks' cards aren't scripted yet. See
+> [DEVLOG.md](DEVLOG.md) for what changed and the known pitfalls. One PPO policy
+> trains on every pairing of the four decks; the agents are still weak.
 
 ## Why
 
@@ -37,10 +39,10 @@ is deliberately narrow and grows in stages:
   (which are part of Origins). Promo and alternate-art printings are dropped
   because they are the same cards with different art. Later sets (Spiritforged,
   Unleashed, Vendetta, …) come after Origins works end to end.
-- **A small, fixed pool of real decks.** The first milestone is a single
-  mirror match: [Kai'Sa](decks/kaisa.json) vs. Kai'Sa. After that come a
-  handful more Origins meta decklists (Master Yi is a likely next one, since it
-  introduces hidden cards), then the rest of the meta.
+- **A small, fixed pool of real decks.** The first milestone was a single
+  mirror match: [Kai'Sa](decks/kaisa.json) vs. Kai'Sa. The next three decks on
+  the final Origins tier list (Annie, Master Yi, Miss Fortune) came next; the
+  rest of the meta comes after that.
 - **Best-of-one games.** No sideboarding and no Bo3 matches.
 - **No deckbuilding.** Agents play fixed decklists. Having an agent *build*
   decks is a separate, much later problem.
@@ -84,6 +86,7 @@ cd riftbound-thing
 
 python3 game.py                         # 200 headless games, random vs random
 python3 sim.py                          # play in the browser at http://localhost:8765
+python3 sim.py --decks annie,master_yi  # your deck, then the agent's
 ```
 
 Play against your own agent (any class with a `name` and an `act(observation, legal)` method):
@@ -99,13 +102,17 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pytest
 ```
 
-Train a PPO agent on the Kai'Sa mirror (self-play, see `ppo.py` for all options),
-then play against it:
+Train one PPO agent on every pairing of the four decks (self-play, see `ppo.py`
+for all options), measure the matchups, then play against it:
 
 ```bash
-.venv/bin/python ppo.py --run kaisa-v1            # Ctrl-C any time; --resume continues
-tail -f checkpoints/kaisa-v1/log.jsonl            # win rates, losses, throughput
-.venv/bin/python sim.py --agent ppo:PPOAgent      # newest checkpoint
+.venv/bin/python ppo.py --run meta-v1                          # Ctrl-C any time; --resume continues
+.venv/bin/python ppo.py --run kaisa-v2 --decks kaisa           # just the Kai'Sa mirror
+tail -f checkpoints/meta-v1/log.jsonl                          # win rates, losses, throughput
+.venv/bin/python matchups.py checkpoints/meta-v1/latest.pt     # win-rate matrix with 95% intervals
+.venv/bin/python duel.py --run annie-vs-yi --decks annie,master_yi --init checkpoints/meta-v1/latest.pt
+                                                               # one agent per deck, trained against each other
+.venv/bin/python sim.py --agent ppo:PPOAgent --decks kaisa,annie   # newest checkpoint
 ```
 
 ## How it works
@@ -149,6 +156,8 @@ player owns their own set of zones.
 | `env.py` | RL environment: encodes observations and legal actions as arrays |
 | `agents.py` | Scripted baseline agents (`GreedyAgent`) |
 | `ppo.py` | Policy network, PPO self-play trainer, `PPOAgent` |
+| `matchups.py` | Plays every deck pairing and prints a win-rate matrix |
+| `duel.py` | Adversarial training for one matchup: one policy per deck |
 | `sim.py` + `sim/index.html` | Local web UI for playing against an agent |
 | `import_sheet.py` | Converts a tab of the card spreadsheet (`.xlsx`) into card JSON |
 | `card_data/` | Card JSON loaded by `cards.load_card_pool()` |
@@ -186,16 +195,20 @@ like legends are fixed via `OVERRIDES` in `import_sheet.py`.
 
 To add a deck:
 
-1. Fill in any missing cards in the spreadsheet, then convert the tab:
+1. Add the decklist to `decks/` in the same format as `decks/kaisa.json`.
+2. Import the cards it uses from the spreadsheet's "Origins" tab. That tab has no
+   Power column, so add each new card's Power cost to `OVERRIDES` in
+   `import_sheet.py` first:
    ```bash
-   python3 import_sheet.py "~/Downloads/Riftbound Collection.xlsx" "Kaisa Deck" card_data/kaisa_deck.json
+   python3 import_sheet.py "~/Downloads/Riftbound Collection.xlsx" Origins card_data/origins_meta.json \
+       --decks decks/annie.json decks/master_yi.json decks/miss_fortune.json
    ```
-2. Add the decklist to `decks/` in the same format as `decks/kaisa.json`.
-3. Check legality with `Deck.load(path, pool).errors()`.
+3. Check legality with `Deck.load(path, pool).errors()`, script every card in
+   `scripts.py`, and add the deck's name to `DECK_NAMES` in `game.py`.
 
 ## Roadmap
 
-**Phase 1: Rules engine** (done for the Kai'Sa mirror)
+**Phase 1: Rules engine** (done for Kai'Sa, Annie, Master Yi and Miss Fortune)
 - [x] Card model, deck legality, zones, visibility
 - [x] Setup, mulligan and the phases of the turn
 - [x] Runes, the rune pool and paying costs
@@ -209,17 +222,21 @@ To add a deck:
 - [x] Spell effects with targets, triggered abilities, extra turns
 - [x] Keywords in the Kai'Sa deck (Accelerate, Legion, Deflect, Assault, Deathknell)
 - [x] Kai'Sa mirror fully playable under the real rules
+- [x] Annie, Master Yi and Miss Fortune: Hidden, Ganking, gear, activated abilities,
+      counters, stuns, Tank and Shield, choices on resolution, the Ending Step
 
 **Phase 2: Training**
 - [x] Gymnasium-style environment wrapper with observation and action encoding
 - [x] Scripted baseline agent (GreedyAgent)
 - [x] PPO self-play trainer with an opponent pool, evaluation and checkpoints
+- [x] One policy trained across every pairing of several decks
 - [ ] Train a Kai'Sa mirror agent that clearly beats GreedyAgent
 - [x] Trained agents selectable as opponents in the sim (`--agent ppo:PPOAgent`)
 
 **Phase 3: Meta analysis**
+- [x] Add the top Origins meta decks (Annie, Master Yi, Miss Fortune)
 - [ ] Add the rest of the Origins meta decks
-- [ ] Matchup matrix across decks
+- [x] Matchup matrix across decks (`matchups.py`; first numbers from a weak agent)
 - [ ] Compare with end-of-season Origins tournament results
 
 **Later / maybe**

@@ -75,9 +75,11 @@ class CardInstance:
     damage: int = 0
     buffs: int = 0
     facedown: bool = False
+    hidden_turn: int | None = None      # 811.1.b: the turn it was hidden; playable from the next one
+    stunned: bool = False               # 423: until the end of the turn
     # "this turn" effects, cleared in the Ending Phase (317.2.c)
     might_mods: list[tuple[int, int | None]] = field(default_factory=list)   # (amount, minimum)
-    granted: dict[str, int] = field(default_factory=dict)                   # keyword -> value, e.g. Assault 3
+    granted: dict[str, int] = field(default_factory=dict)                   # keyword -> value, e.g. Assault 3, Ganking 1
 
     def become_new_object(self) -> None:
         """124 / 124.1: new identity, all temporary modifications dropped."""
@@ -87,6 +89,8 @@ class CardInstance:
         self.damage = 0
         self.buffs = 0
         self.facedown = False
+        self.hidden_turn = None
+        self.stunned = False
         self.might_mods = []
         self.granted = {}
 
@@ -110,6 +114,8 @@ class CardInstance:
             "damage": self.damage,
             "buffs": self.buffs,
             "granted": dict(self.granted),
+            "stunned": self.stunned,
+            "hidden_turn": self.hidden_turn,
         }
 
 

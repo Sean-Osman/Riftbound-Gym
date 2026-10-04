@@ -11,10 +11,36 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
 ## Known pitfalls
 
 ### Rules that are simplified or missing
-- **Only the Kai'Sa deck is scripted.** `scripts.py` covers exactly the cards in
-  `decks/kaisa.json`. Any other spell is unplayable and any other unit has no
-  abilities. Keywords outside the deck (Tank, Backline, Shield, Hidden, Ganking, ...)
-  are not implemented.
+- **Only the four meta decks are scripted.** `scripts.py` covers the Main Board and
+  Rune Deck of `decks/kaisa.json`, `annie.json`, `master_yi.json` and `miss_fortune.json`
+  (not their Side Boards). Any other spell is unplayable and any other unit has no
+  abilities. Keywords outside these decks (Backline, Temporary, Vision, Equip, ...) are
+  not implemented.
+- **"When you play" triggers fire as a spell is played, not as it resolves.** Rule 419.4.a
+  says they trigger once playing is complete, and a countered spell never triggers them
+  (419.4.a.1). Here Ravenbloom Student and Darius still trigger for a spell that Defy or
+  Wind Wall later counters.
+- **Choices the engine makes for the player.** A few choices that almost never matter
+  are made automatically to keep the action count down:
+  - Zhonya's Hourglass saves the dying friendly unit with the most Might when several die
+    at once (373 lets the controller pick).
+  - Vi's "Recycle 1 from your trash" recycles a non-spell first (Annie, Stubborn
+    returns spells).
+  - Annie's legend readies any 2 exhausted runes (which ones can't matter: Energy has no
+    domain and exhausted runes can still be recycled).
+  - Bullet Time's "pay any amount of [A]" uses the rune pool first, then recycles runes,
+    exhausted ones first. At most 8 is offered.
+  - Soulgorger pays the replayed unit's Power the way that keeps the most runes ready.
+- **Options that are left out on purpose.** Miss Fortune's legend is only offered on
+  friendly units at battlefields (Ganking does nothing anywhere else). Move spells don't
+  offer moves the rules would ignore (Ride the Wind out of Vilemaw's Lair to base), and
+  Flash isn't offered with zero targets (355.13 allows it, but it does nothing).
+- **Showdowns can start in the Ending Step.** Dazzling Aurora can play Deadbloom Predator
+  to an occupied enemy battlefield, or Sneaky Deckhand to an open one, at the end of the
+  turn. The cleanup then starts the combat or showdown right away rather than waiting.
+  The rules don't say; this is a judgment call.
+- **Units played by effects count as cards played** (Dazzling Aurora, Soulgorger), so they
+  count toward Darius and Legion.
 - **Order of simultaneous triggers (383.3.d).** The controller should choose the
   order. The engine puts the turn player's triggers first (as the rules say) but
   orders each player's own triggers by board position. Only matters with several
@@ -48,8 +74,10 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   matter once effects react to damage being dealt.
 - **Runes with several domains.** `_rune_domain` takes the first domain letter. Basic
   runes have one domain, but a dual-domain rune would need a choice.
-- **The Hidden / facedown zone** exists but nothing uses it yet (the Master Yi deck
-  will need it).
+- **Hidden cards.** A card hidden on turn N can be played from turn N+1 (the turn counter
+  counts both players' turns). The opponent sees that a battlefield's facedown zone is
+  occupied, never what is there; the log only names the card once it's played or
+  removed (421.4).
 
 ### Engine and API design
 - **Auto-passing.** `step()` passes priority, passes focus, ends the turn or assigns
@@ -99,8 +127,12 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   rejects runes in `"Main Board"`. Decklists exported from other sites may need to be
   split by hand.
 - **Card data** comes from `import_sheet.py`. The sheet has one domain column, so
-  dual-domain cards need `OVERRIDES`. Only the Kai'Sa deck's cards are in
-  `card_data/`.
+  dual-domain cards need `OVERRIDES`. Its "Origins" tab has **no Power column**, so every
+  new card's Power cost is an `OVERRIDES` entry (checked against riftbound.gg's card
+  database). A card imported from that tab without one silently costs no Power. Cards
+  with errata (Zhonya's Hourglass, Dazzling Aurora, The Dreaming Tree, Annie's legend) get
+  their current text there too. `card_data/kaisa_deck.json` is the "Kaisa Deck" tab;
+  `origins_meta.json` holds the rest of the meta decks' cards (`--decks` import).
 - **Test setup must be reachable.** Tests build positions by hand. A position
   that couldn't happen in a real game (units on an uncontrolled battlefield outside
   a showdown, damage left over from an earlier turn) makes the engine do surprising
@@ -121,7 +153,14 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   embedding. Never re-sort it.
 - **Changing the encoding breaks checkpoints.** `TOKEN_FEATURES`, `GLOBAL_FEATURES` and
   `ACTION_FEATURES` fix the input sizes. Adding a feature means retraining (or copying
-  weights by hand).
+  weights by hand). The 2026-09-29 changes did this: `kaisa-v1` no longer loads.
+- **One policy for every deck.** The model has no deck input; it learns which deck it
+  is piloting from its legend, champion and cards. A matchup win rate from `matchups.py`
+  therefore measures the decks under one shared (and still weak) pilot.
+- **Private decisions.** When a player picks from cards only they can see (Stacked Deck,
+  discarding), the other player's observation has the decision's `count` but empty
+  `options`. The encoder adds a token (zone `choice`) for each option card that isn't
+  already on the board.
 - **Encoding reads only the observation.** It must never take anything from `Game`
   directly; `test_encoding_never_depends_on_hidden_information` swaps the opponent's
   hand with their deck and checks the encoding doesn't change.
@@ -137,6 +176,150 @@ Rule numbers refer to `Riftbound-Core-Rules-RUP4-July-16-2026.pdf`.
   300 random games.
 
 ---
+
+## 2026-09-30: Reward shaping for the point lead
+
+- `--point-reward W` (`Config.point_reward`, default 0: off) in `ppo.py` and `duel.py`. Each
+  decision stores a potential, W × (my points − the opponent's) / Victory Score, read from
+  the Game (it's a reward, never a policy input). `_gae` rewards each step with the change
+  in potential, so points are credited when they're scored, not only at the end.
+- It is potential-based shaping (Ng, Harada & Russell 1999): the potential after the game
+  is 0, so over a whole game the shaping cancels and the best policy is still the one
+  that wins most. It speeds up credit assignment without teaching the agent to trade
+  wins for bigger margins. W = 0.5 makes an 8-point lead worth half a win mid-game.
+- Tests: shaped returns equal the result minus the potential at each decision, and from
+  the first decision they match unshaped returns.
+- **Result (`annie-vs-yi-pts`, W = 0.5, same init and settings as `annie-vs-yi`, 120
+  iterations):** no measurable effect. Annie's head-to-head win rate, pooled over the
+  evals from iteration 20 on: 28.5% ± 1.9 with shaping vs 27.4% ± 2.0 without (real:
+  57%). Skill against GreedyAgent piloting the other deck was also unchanged (Annie agent
+  56% vs 54%, Master Yi agent 81% vs 82%). Points come soon enough after the plays that
+  earn them that the win/loss signal was already getting through; Annie's problem is
+  plays whose payoff is further away.
+
+## 2026-09-30: Adversarial training for a single matchup (`duel.py`)
+
+- **Why:** one shared policy across all 10 pairings reproduced the real Origins matchups
+  badly (21 points off on average) and got no closer between 300 and 600 iterations. For
+  one matchup, a dedicated policy per deck, each trained against the other, is a better
+  fit: each specializes in its own deck's plan.
+- **`duel.py`:** side A pilots one deck and side B the other. Each iteration half the
+  games are current A vs current B (both learn), a quarter are current A vs a past
+  snapshot of B (only A learns) and a quarter the reverse, so neither side forgets how
+  to beat strategies the other has abandoned. Equal games and updates per side. Every
+  10 iterations: 200 head-to-head games (sampled actions) with a 95% interval, and each
+  side against GreedyAgent piloting the other deck. `--init` warm-starts both sides from
+  a `ppo.py` checkpoint; each side saves as an ordinary `ppo.py` checkpoint.
+- **`ppo.py`:** the PPO update is now the module-level `ppo_update` (shared by both
+  trainers); `Trainer.update` calls it.
+- **Test:** `test_duel_trains_both_sides_saves_resumes_and_evaluates` in `test_ppo.py`.
+- **First run (`annie-vs-yi`, stopped at iteration 117):** both sides warm-started from
+  `meta-v1` @600. Annie's head-to-head win rate stayed at 21-30% from iteration 20 on
+  (real: 57%). Against GreedyAgent piloting the other deck, the Master Yi agent reached
+  84-88% and the Annie agent stayed at 51-58%; in mirrors against GreedyAgent both were
+  about even (46% and 54%, 80 games each). GreedyAgent piloting both sides plays this
+  matchup at 53% for Annie.
+- **Caveat for every matchup number so far:** with learning agents, a win rate mixes deck
+  strength with how easy each deck is to learn. Master Yi's plan (ramp into 8-10 Might
+  units) is easy for PPO; Annie's (tempo, bouncing units at the right moment, holding up
+  Reactions) pays off many decisions later and is learned slowly. The ramp decks looking
+  strong and Annie weak, the reverse of the real meta, fits that. Before reading a table
+  as deck strength, check it with a best-response test (freeze one side, train a fresh
+  agent only to beat it) or with search at play time, and only trust numbers that stop
+  moving as skill rises.
+
+## 2026-09-29: Annie, Master Yi and Miss Fortune; multi-deck training
+
+The three next-best Origins decks after Kai'Sa on riftbound.gg's final Origins tier list
+(2025-12-27), from the same "Best Origins" series as the Kai'Sa list: `decks/annie.json`,
+`decks/master_yi.json`, `decks/miss_fortune.json`. 48 new cards in
+`card_data/origins_meta.json`, all scripted.
+
+- **Card data:** `import_sheet.py --decks` imports only the cards a set of decklists uses.
+  Power costs and errata come from `OVERRIDES` (see Known pitfalls).
+- **Rules added:**
+  - Hidden and the Hide action (421, 811): pay [A] to hide at a battlefield you control;
+    from the next turn it plays for [0] with Reaction, choosing targets and its location
+    at that battlefield (811.1.d). Facedown cards go to the trash when their controller
+    loses the battlefield (107.3.d, 323.7).
+  - Ganking (810, 144.4.c), including granted Ganking. Standard Moves now also combine
+    units from different origins (144.3.b).
+  - Activated abilities (376-381) on units, gear and legends, with Energy, Power,
+    exhaust and "recycle from your trash" costs.
+  - Choices made on resolution (355.17): scripts return an `Ask`, which becomes a
+    Decision of kind `"resolve"`. Look at the top 3, discard, reveal a hand and pick,
+    pay any amount, where a played unit enters.
+  - The Ending Step (317.1) with "at the end of your turn" triggers, then the Expiration
+    Step, which also clears stuns (423.1.a.2).
+  - Counter (425), stun (423), Shield (814), Tank (815) in damage assignment, gear
+    (recalled from battlefields in cleanups, 457.1), kill instructions (428),
+    discard (422), reveal (424), "I enter ready" (369.3), playing units to open or
+    occupied enemy battlefields (170.11, 355.2.b), effects that play units (419.3).
+  - Replacement effects on death (367, 373): Zhonya's Hourglass.
+  - Victory score raised by Aspirant's Climb; Vilemaw's Lair blocks moves to base,
+    standard or not (359.3.e.6).
+  - New trigger events: `chosen` (383.4.b), `move`, `killed`, `leaves`, `discard`,
+    `end_turn`, plus once-per-turn triggers ("the first time", 383.1).
+- **Engine API:** `Game.units()` no longer includes gear at a battlefield. New public
+  helpers for scripts (`move_units`, `kill`, `discard`, `counter`, `play_unit`, ...).
+  `observation()` takes `victory_score` from the game, has `stunned`/`hidden_turn` on
+  objects, and decisions with `count` (options hidden from the other player when
+  private). `load_deck(s)` and `DECK_NAMES` load decks by name.
+- **RL:** encoding features for stuns, granted Ganking, hidden cards and resolve
+  decisions; HIDE and ACTIVATE action kinds. `RiftboundEnv.reset(seed, decks)`. `ppo.py`
+  trains one policy on every pairing of `--decks` (all 10 by default, cycled evenly,
+  both seat orders) and logs self-play results per pairing. New `matchups.py` plays
+  every pairing and prints a win-rate matrix with 95% intervals.
+- **Sim:** `--decks yours,theirs`.
+- `GreedyAgent` knows the new spells, uses abilities and hides cards.
+- **First training run (`meta-v1`):** 300 iterations × 100 games (30,000 self-play games,
+  about 3,000 per pairing, both seat orders). The policy ends at 97% against RandomAgent
+  and about 60% against GreedyAgent (57-70% over the last 100 iterations; each eval is
+  100 games, so ±10%). `matchups.py`, 200 games per pairing, row deck's win rate:
+
+  | PPO `meta-v1` | Kai'Sa | Annie | Master Yi | Miss Fortune |
+  |---|---|---|---|---|
+  | **Kai'Sa** | mirror | 72% | 43% | 39% |
+  | **Annie** | 28% | mirror | 28% | 26% |
+  | **Master Yi** | 57% | 72% | mirror | 77% |
+  | **Miss Fortune** | 61% | 74% | 23% | mirror |
+
+  | GreedyAgent | Kai'Sa | Annie | Master Yi | Miss Fortune |
+  |---|---|---|---|---|
+  | **Kai'Sa** | mirror | 62% | 54% | 73% |
+  | **Annie** | 38% | mirror | 53% | 60% |
+  | **Master Yi** | 46% | 47% | mirror | 86% |
+  | **Miss Fortune** | 27% | 40% | 15% | mirror |
+
+  95% intervals are about ±7 points. Both pilots agree that Master Yi beats Miss Fortune
+  and that Annie is weak against Kai'Sa. They disagree elsewhere (Miss Fortune goes from
+  worst under Greedy to beating Kai'Sa under PPO), so these numbers say more about
+  what a weak pilot can do with each deck than about the real matchups. Annie, Tier 1 in
+  the real meta, is last here: its Hidden/Reaction tricks need skill a 300-iteration
+  agent doesn't have yet.
+- **Resumed to 600 iterations** (60,000 games in all): 98% against RandomAgent, 74% against
+  GreedyAgent at the last eval. Against real Origins results it did not get closer:
+
+  | Row deck's win rate | Real | Matches | PPO @300 | PPO @600 | GreedyAgent |
+  |---|---|---|---|---|---|
+  | Kai'Sa vs Annie | 50% | 493 | 72% | 70% | 62% |
+  | Kai'Sa vs Master Yi | 45% | 431 | 43% | 38% | 54% |
+  | Kai'Sa vs Miss Fortune | 51% | 235 | 39% | 32% | 73% |
+  | Annie vs Master Yi | 57% | 254 | 28% | 36% | 53% |
+  | Annie vs Miss Fortune | 59% | 113 | 26% | 24% | 60% |
+  | Master Yi vs Miss Fortune | 48% | 99 | 77% | 74% | 86% |
+  | Mean absolute error | | | 21 pts | 21 pts | 14 pts |
+
+  "Real" is riftDecks' win-rate matrix for the Origins metagame
+  (https://riftdecks.com/stats/winrate?metagame_id=1, 8,613 reported tournament matches,
+  read 2026-09-29). Real matchups all sit between 45% and 59% and Annie was the best of
+  the four; the agent spreads the decks much further apart and makes Annie the worst.
+  The reported matches skew toward strong players and players' lists vary, so treat
+  them as a target, not ground truth. Beating GreedyAgent more often has not brought
+  the matchups closer to reality: the policy is learning some decks faster than others.
+- **Tests:** `test_origins.py` (46 tests: every new mechanic and card, random games
+  in every pairing checking card conservation and hidden information). The env tests
+  now run on all pairings and check the opponent's facedown cards don't leak.
 
 ## 2026-09-24: Agents in the sim no longer see Concede
 

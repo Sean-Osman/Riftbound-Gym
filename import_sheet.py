@@ -1,6 +1,11 @@
 """Convert a tab of the 'Riftbound Collection' spreadsheet into card JSON.
 
     python3 import_sheet.py "~/Downloads/Riftbound Collection.xlsx" "Kaisa Deck" card_data/kaisa_deck.json
+    python3 import_sheet.py "~/Downloads/Riftbound Collection.xlsx" Origins card_data/origins_meta.json \\
+        --decks decks/annie.json decks/master_yi.json decks/miss_fortune.json
+
+`--decks` keeps only the cards those decklists use that aren't already in
+another file of the output folder.
 
 Stdlib only (reads the .xlsx XML directly). The output loads with
 cards.load_card_pool(). Known gaps in the sheet are patched via OVERRIDES.
@@ -39,9 +44,47 @@ TYPE_COLUMN = {
 }
 
 # The sheet's Domain column holds a single domain, so dual-domain cards
-# (every legend) lose their second one. Patch by card_id.
+# (every legend) lose their second one. The "Origins" tab also has no Power
+# column, so Power costs come from here (checked against riftbound.gg's card
+# database). Cards with errata get the current text: the Core Rules quote the
+# errata'd Zhonya's Hourglass (357.2.a, 369.1). Patch by card_id.
 OVERRIDES: dict[str, dict[str, Any]] = {
     "OGN-247": {"domains": ["R", "B"]},    # Kai'Sa, Daughter of the Void: Fury / Mind
+    # legends and signature cards
+    "OGS-017": {"domains": ["R", "P"],     # Annie, Dark Child: Fury / Chaos
+                "rules_text": "At the end of your turn, ready up to 2 runes."},
+    "OGS-019": {"domains": ["G", "O"]},    # Master Yi, Wuju Bladesman: Calm / Body
+    "OGN-267": {"domains": ["O", "P"]},    # Miss Fortune, Bounty Hunter: Body / Chaos
+    "OGN-268": {"domains": ["O", "P"]},    # Bullet Time
+    # Power costs
+    "OGN-036": {"power": "1R"},            # Vi, Destructive
+    "OGN-043": {"power": "1G"},            # Charm
+    "OGN-045": {"power": "1G"},            # Defy
+    "OGN-050": {"power": "1G"},            # Rune Prison
+    "OGN-064": {"power": "2G"},            # Wind Wall
+    "OGN-082": {"power": "2G"},            # Whiteflame Protector
+    "OGN-128": {"power": "1O"},            # Challenge
+    "OGN-154": {"power": "1O"},            # Primal Strength
+    "OGN-156": {"power": "1O"},            # Sabotage
+    "OGN-158": {"power": "2O"},            # Volibear, Imposing
+    "OGN-161": {"power": "2O"},            # Deadbloom Predator
+    "OGN-162": {"power": "1O"},            # Miss Fortune, Captain
+    "OGN-172": {"power": "2P"},            # Rebuke
+    "OGN-173": {"power": "1P"},            # Ride the Wind
+    "OGN-192": {"power": "2P"},            # Mindsplitter
+    "OGN-196": {"power": "2P"},            # Soulgorger
+    "OGN-201": {"power": "1P"},            # Invert Timelines
+    "OGS-009": {"power": "1O"},            # Master Yi, Honed
+    "OGS-010": {"power": "1P"},            # Annie, Stubborn
+    # Power costs and errata
+    "OGN-160": {"power": "2O",             # Dazzling Aurora
+                "rules_text": "At the end of your turn, reveal cards from the top of your Main Deck until "
+                              "you reveal a unit and banish it. Play it, ignoring its cost, and recycle the rest."},
+    "OGN-077": {"rules_text": "[Hidden] (Hide now for [A] to react with later for [0].) If a friendly unit "
+                              "would die, kill this instead. Heal that unit, exhaust it, and recall it. "
+                              "(Send it to base. This isn't a move.)"},   # Zhonya's Hourglass
+    "OGN-292": {"rules_text": "When a player chooses a friendly unit here with a spell for the first time "
+                              "each turn, they draw 1."},                 # The Dreaming Tree
 }
 
 # 164.2: basic runes have no printed rules text in the sheet
@@ -130,6 +173,7 @@ def leading_keywords(text: str) -> dict[str, int | None]:
 def split_name(full: str) -> tuple[str, str | None]:
     """'Kai'Sa, Survivor' / 'Ahri - Nine-Tailed Fox' -> (short name, subtitle)."""
     full = re.sub(r"\s*\((Signature|Overnumbered|Showcase)\)$", "", full)
+    full = re.sub(r" - Starter$", "", full)               # Proving Grounds starter legends
     for sep in (", ", " - "):
         if sep in full:
             short, subtitle = full.split(sep, 1)
@@ -181,9 +225,28 @@ def row_to_card(row: dict[str, str]) -> dict[str, Any]:
     return {k: v for k, v in card.items() if v not in (None, [], {}, "", False)}
 
 
-def main(xlsx: str, sheet: str, out: str) -> None:
+def deck_card_ids(paths: list[str]) -> set[str]:
+    """Every card id in the decklists' Main Board and Rune Deck."""
+    ids: set[str] = set()
+    for path in paths:
+        sections = json.loads(Path(path).read_text(encoding="utf-8"))["deck"]
+        for name in ("Main Board", "Rune Deck"):
+            ids |= {e["id"] for e in sections.get(name, [])}
+    return ids
+
+
+def main(xlsx: str, sheet: str, out: str, decks: list[str] | None = None) -> None:
+    """With `decks`, keep only the cards those decklists use that no other file
+    in the output folder defines yet."""
     rows = read_sheet(Path(xlsx).expanduser(), sheet)
     cards = [row_to_card(r) for r in rows if r.get("Card Name")]
+    if decks:
+        wanted = deck_card_ids(decks)
+        taken = {c["card_id"] for p in Path(out).parent.glob("*.json") if p.resolve() != Path(out).resolve()
+                 for c in json.loads(p.read_text(encoding="utf-8"))}
+        cards = [c for c in cards if c["card_id"] in wanted - taken]
+        if missing := wanted - taken - {c["card_id"] for c in cards}:
+            raise ValueError(f"not in the sheet: {sorted(missing)}")
     for c in cards:
         card_from_dict(c)                      # validate against the rules model
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -192,4 +255,6 @@ def main(xlsx: str, sheet: str, out: str) -> None:
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:4])
+    args = sys.argv[1:]
+    decks = args[args.index("--decks") + 1:] if "--decks" in args else None
+    main(*args[:3], decks=decks)

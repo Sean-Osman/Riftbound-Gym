@@ -1,6 +1,7 @@
-"""PPO self-play on the Kai'Sa mirror.
+"""PPO self-play over a pool of decks.
 
-    python3 ppo.py --run kaisa-v1                   # train (Ctrl-C is safe: latest.pt is saved each iteration)
+    python3 ppo.py --run meta-v1                    # all four meta decks, every pairing (the default)
+    python3 ppo.py --run kaisa-v1 --decks kaisa     # the Kai'Sa mirror only
     python3 ppo.py --run kaisa-v1 --resume          # continue a run
     python3 ppo.py --run smoke --iterations 2 --games 8 --workers 2 --eval-games 8   # quick check
     python3 sim.py --agent ppo:PPOAgent             # play the newest checkpoint in the browser
@@ -9,6 +10,11 @@ The policy scores every legal action (see env.py), so the action space can be an
 size. Each iteration, rollout workers play `--games` games and send back the
 learner's decisions with advantages already computed; the learner then does a
 few epochs of clipped PPO on them.
+
+One policy plays every deck: it sees its own legend and cards in the encoding.
+Each game gets a pairing of `--decks` (every pair including mirrors, cycled so
+they come up equally often) with the seats' decks alternating, so every deck
+gets played from both sides of every matchup.
 
 Opponents (per game): the current policy against itself (both seats are
 training data), a saved past version from the pool (only the learner's seat is
@@ -40,15 +46,16 @@ import torch.nn.functional as F
 from agents import GreedyAgent
 from env import (ACTION_DIM, GLOBAL_DIM, N_POINTERS, TOKEN_DIM, CardVocab, Encoded, Encoder,
                  RiftboundEnv)
-from game import ROOT, Action, ActionKind, RandomAgent
+from game import DECK_NAMES, ROOT, Action, ActionKind, RandomAgent, load_decks
 
 CHECKPOINTS = ROOT / "checkpoints"
 
 
 @dataclass
 class Config:
-    run: str = "kaisa-mirror"
+    run: str = "meta"
     seed: int = 0
+    decks: str = ",".join(DECK_NAMES)   # decks/<name>.json, comma-separated
     iterations: int = 1000
     games: int = 64                 # games per iteration
     workers: int = max(1, (os.cpu_count() or 2) - 1)   # 0 plays in this process
@@ -72,11 +79,23 @@ class Config:
     max_grad_norm: float = 0.5
     gamma: float = 1.0              # episodes are short and only the result counts
     lam: float = 0.95
+    # Shaping reward for the point lead (potential-based, so the best policy is still
+    # the one that wins most: see _gae). 0 turns it off; 0.5 makes an 8-point lead
+    # worth half a win while the game is on.
+    point_reward: float = 0.0
     max_decisions: int = 500
     # evaluation against the scripted baselines
     eval_every: int = 10
     eval_games: int = 100
     device: str = "auto"            # for the learner; rollouts always run on CPU
+
+    def deck_names(self) -> list[str]:
+        return [d.strip() for d in self.decks.split(",") if d.strip()]
+
+    def pairings(self) -> list[tuple[str, str]]:
+        """Every pair of decks, mirrors included, each once."""
+        names = self.deck_names()
+        return [(a, b) for i, a in enumerate(names) for b in names[i:]]
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +234,18 @@ class Sample:
     value: float
     advantage: float = 0.0
     ret: float = 0.0
+    potential: float = 0.0      # point-lead shaping potential at this decision (see _gae)
+
+
+def point_potential(env: RiftboundEnv, seat: int, weight: float) -> float:
+    """Shaping potential: `weight` times the seat's point lead as a fraction of the
+    Victory Score. Read from the Game, not the observation: it is a reward, never
+    an input to the policy."""
+    if not weight:
+        return 0.0
+    g = env.game
+    lead = g.points[seat] - max(g.points[s] for s in range(len(g.points)) if s != seat)
+    return weight * lead / g.victory_score
 
 
 @dataclass
@@ -222,6 +253,7 @@ class GameSpec:
     seed: int
     opponent: str           # "self", "greedy", "random" or a pool checkpoint path
     learner: int            # the learner's seat (both seats learn in self-play)
+    decks: tuple[str, str]  # seat 0's deck, seat 1's deck
     record: bool = True     # False for evaluation games
     greedy: bool = False    # learner picks its most likely action (evaluation)
 
@@ -234,6 +266,7 @@ def _init_worker(cfg: dict[str, Any], vocab: list[str]) -> None:
     c = Config(**cfg)
     v = CardVocab(vocab)
     _worker.update(cfg=c, vocab=v, model=build_model(c, v).eval(), pool={},
+                   decks=load_decks(tuple(c.deck_names())),
                    env=RiftboundEnv(vocab=v, max_decisions=c.max_decisions))
 
 
@@ -254,9 +287,10 @@ def _run_games(weights: dict[str, np.ndarray], specs: list[GameSpec]) -> list[di
     cfg: Config = _worker["cfg"]
     env: RiftboundEnv = _worker["env"]
     results = []
+    decks = _worker["decks"]
     for spec in specs:
         rng = np.random.default_rng(spec.seed)
-        env.reset(spec.seed)
+        env.reset(spec.seed, [decks[spec.decks[0]], decks[spec.decks[1]]])
         players: list[Any] = [model, model]
         other = 1 - spec.learner
         if spec.opponent == "greedy":
@@ -279,7 +313,8 @@ def _run_games(weights: dict[str, np.ndarray], specs: list[GameSpec]) -> list[di
                 greedy = spec.greedy and seat == spec.learner
                 i, logp = _pick(logits[0], rng, greedy)
                 if spec.record and player is model and seat in learning:
-                    trajectories[seat].append(Sample(enc, i, logp, float(value[0])))
+                    trajectories[seat].append(Sample(enc, i, logp, float(value[0]),
+                                                     potential=point_potential(env, seat, cfg.point_reward)))
                 env.step(i)
         samples = []
         for seat in learning:
@@ -288,16 +323,23 @@ def _run_games(weights: dict[str, np.ndarray], specs: list[GameSpec]) -> list[di
             samples += traj
         results.append({"opponent": spec.opponent if spec.opponent in ("self", "greedy", "random") else "pool",
                         "reward": env.reward(spec.learner), "decisions": env.decisions,
-                        "truncated": env.truncated, "samples": samples})
+                        "truncated": env.truncated, "samples": samples, "decks": spec.decks,
+                        "learner": spec.learner, "winner": env.winner})
     return results
 
 
 def _gae(traj: list[Sample], reward: float, gamma: float, lam: float) -> None:
-    """Generalized advantage estimation over one seat's decisions. The only reward
-    is the result, after the seat's last decision."""
+    """Generalized advantage estimation over one seat's decisions. The result comes
+    after the seat's last decision. With point shaping, each step also gets
+    gamma * potential(next decision) - potential(this decision): the change in the
+    seat's point lead, credited as soon as it happens. The potential after the game
+    is 0, so over a game the shaping cancels out and the best policy is still the
+    one that wins most (potential-based shaping, Ng, Harada & Russell 1999)."""
     advantage, next_value = 0.0, 0.0
     for t in reversed(range(len(traj))):
-        r = reward if t == len(traj) - 1 else 0.0
+        last = t == len(traj) - 1
+        next_potential = 0.0 if last else traj[t + 1].potential
+        r = (reward if last else 0.0) + gamma * next_potential - traj[t].potential
         delta = r + gamma * next_value - traj[t].value
         advantage = delta + gamma * lam * advantage
         traj[t].advantage = advantage
@@ -308,6 +350,63 @@ def _gae(traj: list[Sample], reward: float, gamma: float, lam: float) -> None:
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
+
+def ppo_update(model: PolicyNet, opt: torch.optim.Optimizer, cfg: Config, samples: list[Sample],
+               iteration: int, device: torch.device) -> dict[str, float]:
+    """A few epochs of clipped PPO on one iteration's samples, stopping early once
+    a minibatch's approximate KL passes 1.5x the target."""
+    model.train()
+    stats: dict[str, list[float]] = {}
+    order = np.arange(len(samples))
+    np_rng = np.random.default_rng(iteration)
+    planned = cfg.epochs * math.ceil(len(order) / cfg.minibatch)
+    steps, stopped = 0, False
+    for _ in range(cfg.epochs):
+        if stopped:
+            break
+        np_rng.shuffle(order)
+        for start in range(0, len(order), cfg.minibatch):
+            mb = [samples[i] for i in order[start:start + cfg.minibatch]]
+            dev = device
+            batch = Batch([s.enc for s in mb], dev)
+            act = torch.tensor([s.action for s in mb], device=dev)
+            old_logp = torch.tensor([s.logp for s in mb], dtype=torch.float32, device=dev)
+            adv = torch.tensor([s.advantage for s in mb], dtype=torch.float32, device=dev)
+            ret = torch.tensor([s.ret for s in mb], dtype=torch.float32, device=dev)
+            adv = (adv - adv.mean()) / (adv.std() + 1e-8) if len(mb) > 1 else adv
+            logits, value = model(batch)
+            logp_all = F.log_softmax(logits, dim=-1)
+            logp = logp_all.gather(1, act[:, None]).squeeze(1)
+            entropy = -(logp_all.exp() * logp_all).masked_fill(~batch.action_mask, 0).sum(-1).mean()
+            ratio = (logp - old_logp).exp()
+            pg = -torch.min(ratio * adv, ratio.clamp(1 - cfg.clip, 1 + cfg.clip) * adv).mean()
+            v_loss = 0.5 * F.mse_loss(value, ret)
+            loss = pg + cfg.vf_coef * v_loss - cfg.ent_coef * entropy
+            opt.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+            opt.step()
+            steps += 1
+            with torch.no_grad():
+                kl = ((ratio - 1) - (logp - old_logp)).mean()
+                for k, v in (("policy_loss", pg), ("value_loss", v_loss), ("entropy", entropy),
+                             ("approx_kl", kl),
+                             ("clip_frac", ((ratio - 1).abs() > cfg.clip).float().mean())):
+                    stats.setdefault(k, []).append(float(v))
+            if cfg.target_kl and float(kl) > 1.5 * cfg.target_kl:
+                stopped = True                                  # the policy moved far enough
+                break
+    values = np.array([s.value for s in samples])
+    returns = np.array([s.ret for s in samples])
+    var = returns.var()
+    result = {k: float(np.mean(v)) for k, v in stats.items()}
+    result["update_frac"] = steps / planned
+    result["lr"] = opt.param_groups[0]["lr"]
+    result["explained_variance"] = float(1 - (returns - values).var() / var) if var > 0 else 0.0
+    model.eval()
+    return result
+
+
 
 class Trainer:
     def __init__(self, cfg: Config, *, resume: bool = False):
@@ -362,9 +461,13 @@ class Trainer:
     def _specs(self) -> list[GameSpec]:
         cfg = self.cfg
         pool = sorted(self.pool_dir.glob("*.pt"))[-cfg.pool_size:]
+        pairings = cfg.pairings()
         specs = []
         for k in range(cfg.games):
-            seed = (cfg.seed * 1_000_003 + self.iteration * cfg.games + k) % (1 << 31)
+            n = self.iteration * cfg.games + k
+            seed = (cfg.seed * 1_000_003 + n) % (1 << 31)
+            a, b = pairings[n % len(pairings)]
+            decks = (a, b) if (n // len(pairings)) % 2 == 0 else (b, a)
             roll = self.rng.random()
             if roll < cfg.greedy_frac:
                 opponent = "greedy"
@@ -372,14 +475,20 @@ class Trainer:
                 opponent = str(self.rng.choice(pool))
             else:
                 opponent = "self"
-            specs.append(GameSpec(seed, opponent, learner=k % 2))
+            specs.append(GameSpec(seed, opponent, learner=k % 2, decks=decks))
         return specs
 
     def evaluate(self, games: int | None = None) -> dict[str, float]:
         """Win rate of the greedy (argmax) policy against the scripted agents,
         alternating seats. Evaluation seeds never overlap training seeds."""
         games = games or self.cfg.eval_games
-        specs = [GameSpec(10**9 + k, opp, learner=k % 2, record=False, greedy=True)
+        pairings = self.cfg.pairings()
+
+        def decks(k: int) -> tuple[str, str]:
+            a, b = pairings[k % len(pairings)]
+            return (a, b) if (k // len(pairings)) % 2 == 0 else (b, a)
+
+        specs = [GameSpec(10**9 + k, opp, learner=k % 2, decks=decks(k), record=False, greedy=True)
                  for opp in ("random", "greedy") for k in range(games)]
         out: dict[str, list[float]] = {}
         for r in self._play(specs):
@@ -387,57 +496,7 @@ class Trainer:
         return {f"eval_vs_{k}": float(np.mean(v)) for k, v in out.items()}
 
     def update(self, samples: list[Sample]) -> dict[str, float]:
-        cfg = self.cfg
-        self.model.train()
-        stats: dict[str, list[float]] = {}
-        order = np.arange(len(samples))
-        np_rng = np.random.default_rng(self.iteration)
-        planned = cfg.epochs * math.ceil(len(order) / cfg.minibatch)
-        steps, stopped = 0, False
-        for _ in range(cfg.epochs):
-            if stopped:
-                break
-            np_rng.shuffle(order)
-            for start in range(0, len(order), cfg.minibatch):
-                mb = [samples[i] for i in order[start:start + cfg.minibatch]]
-                dev = self.device
-                batch = Batch([s.enc for s in mb], dev)
-                act = torch.tensor([s.action for s in mb], device=dev)
-                old_logp = torch.tensor([s.logp for s in mb], dtype=torch.float32, device=dev)
-                adv = torch.tensor([s.advantage for s in mb], dtype=torch.float32, device=dev)
-                ret = torch.tensor([s.ret for s in mb], dtype=torch.float32, device=dev)
-                adv = (adv - adv.mean()) / (adv.std() + 1e-8) if len(mb) > 1 else adv
-                logits, value = self.model(batch)
-                logp_all = F.log_softmax(logits, dim=-1)
-                logp = logp_all.gather(1, act[:, None]).squeeze(1)
-                entropy = -(logp_all.exp() * logp_all).masked_fill(~batch.action_mask, 0).sum(-1).mean()
-                ratio = (logp - old_logp).exp()
-                pg = -torch.min(ratio * adv, ratio.clamp(1 - cfg.clip, 1 + cfg.clip) * adv).mean()
-                v_loss = 0.5 * F.mse_loss(value, ret)
-                loss = pg + cfg.vf_coef * v_loss - cfg.ent_coef * entropy
-                self.opt.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), cfg.max_grad_norm)
-                self.opt.step()
-                steps += 1
-                with torch.no_grad():
-                    kl = ((ratio - 1) - (logp - old_logp)).mean()
-                    for k, v in (("policy_loss", pg), ("value_loss", v_loss), ("entropy", entropy),
-                                 ("approx_kl", kl),
-                                 ("clip_frac", ((ratio - 1).abs() > cfg.clip).float().mean())):
-                        stats.setdefault(k, []).append(float(v))
-                if cfg.target_kl and float(kl) > 1.5 * cfg.target_kl:
-                    stopped = True                                  # the policy moved far enough
-                    break
-        values = np.array([s.value for s in samples])
-        returns = np.array([s.ret for s in samples])
-        var = returns.var()
-        result = {k: float(np.mean(v)) for k, v in stats.items()}
-        result["update_frac"] = steps / planned
-        result["lr"] = self.opt.param_groups[0]["lr"]
-        result["explained_variance"] = float(1 - (returns - values).var() / var) if var > 0 else 0.0
-        self.model.eval()
-        return result
+        return ppo_update(self.model, self.opt, self.cfg, samples, self.iteration, self.device)
 
     def save(self, path: Path) -> None:
         tmp = path.with_suffix(".tmp")
@@ -469,6 +528,14 @@ class Trainer:
                     rewards = [r["reward"] for r in results if r["opponent"] == opp]
                     if rewards:
                         row[f"win_vs_{opp}"] = float(np.mean([x > 0 for x in rewards]))
+                # self-play results per pairing: "deck0|deck1" -> [seat 0 wins, finished games]
+                matchups: dict[str, list[int]] = {}
+                for r in results:
+                    if r["opponent"] == "self" and r["winner"] is not None:
+                        entry = matchups.setdefault("|".join(r["decks"]), [0, 0])
+                        entry[0] += r["winner"] == 0
+                        entry[1] += 1
+                row["self_play_matchups"] = matchups
                 if self.iteration % cfg.snapshot_every == 0:
                     self.save(self.pool_dir / f"iter_{self.iteration:06d}.pt")
                 if self.iteration % cfg.eval_every == 0:

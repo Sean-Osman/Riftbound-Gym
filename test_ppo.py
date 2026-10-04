@@ -56,11 +56,34 @@ def test_gae_with_only_a_final_reward():
     assert round(traj[-1].advantage, 6) == -1.5
 
 
+def test_point_shaping_credits_points_at_once_and_cancels_over_a_game():
+    """Potentials 0 -> 0.2 -> 0.5 (the lead grew twice), then a win. Monte Carlo
+    returns are the result minus the potential where each decision was made, so the
+    step after scoring sees the gain right away, and from the first decision the
+    shaping adds nothing: winning is still all that counts."""
+    traj = [ppo.Sample(None, 0, 0.0, 0.0, potential=p) for p in (0.0, 0.2, 0.5)]
+    ppo._gae(traj, 1.0, gamma=1.0, lam=1.0)
+    assert [round(s.ret, 6) for s in traj] == [1.0, 0.8, 0.5]
+    ppo._gae(traj, 1.0, gamma=1.0, lam=0.0)                              # one-step rewards
+    assert [round(s.advantage, 6) for s in traj] == [0.2, 0.3, 0.5]      # +0.2, +0.3, then 1 - 0.5
+    flat = [ppo.Sample(None, 0, 0.0, 0.0) for _ in range(3)]
+    ppo._gae(flat, 1.0, gamma=1.0, lam=1.0)
+    assert round(flat[0].ret, 6) == 1.0                                  # the same as with shaping above
+
+
+def test_point_potential_is_the_lead_over_the_victory_score():
+    env = RiftboundEnv(seed=0)
+    env.game.points = [5, 1]
+    assert ppo.point_potential(env, 0, 0.5) == 0.5 * 4 / 8
+    assert ppo.point_potential(env, 1, 0.5) == -0.5 * 4 / 8
+    assert ppo.point_potential(env, 0, 0.0) == 0.0
+
+
 def test_training_runs_saves_resumes_and_the_agent_plays(tmp_path, monkeypatch):
     monkeypatch.setattr(ppo, "CHECKPOINTS", tmp_path)
     cfg = ppo.Config(run="t", iterations=2, games=4, workers=0, d_model=32, layers=1, heads=2,
                      minibatch=64, epochs=1, snapshot_every=1, eval_every=2, eval_games=2,
-                     greedy_frac=0.25, pool_frac=0.25, device="cpu")
+                     greedy_frac=0.25, pool_frac=0.25, device="cpu", point_reward=0.5)
     ppo.Trainer(cfg).train()
     lines = (tmp_path / "t" / "log.jsonl").read_text().splitlines()
     assert len(lines) == 2 and "eval_vs_greedy" in lines[-1]
@@ -95,3 +118,25 @@ def test_updates_stop_early_once_kl_passes_the_target(tmp_path, monkeypatch):
     assert capped.update(samples)["update_frac"] < 1
     free = ppo.Trainer(ppo.Config(run="free", target_kl=0.0, **base))
     assert free.update(samples)["update_frac"] == 1
+
+
+def test_duel_trains_both_sides_saves_resumes_and_evaluates(tmp_path, monkeypatch):
+    import duel
+    monkeypatch.setattr(duel, "CHECKPOINTS", tmp_path)
+    cfg = ppo.Config(run="d", iterations=2, games=8, workers=1, d_model=32, layers=1, heads=2,
+                     minibatch=64, epochs=1, snapshot_every=1, eval_every=2, device="cpu")
+    duel.DuelTrainer(cfg, ("annie", "master_yi"), init=None, resume=False).train(eval_games=4)
+    lines = (tmp_path / "d" / "log.jsonl").read_text().splitlines()
+    assert len(lines) == 2 and "eval_a_win_rate" in lines[-1]
+    for deck in ("annie", "master_yi"):
+        assert len(list((tmp_path / "d" / deck / "pool").glob("*.pt"))) == 2
+        assert ppo.PPOAgent(tmp_path / "d" / deck / "latest.pt").name.endswith("#2")
+    with pytest.raises(FileExistsError):
+        duel.DuelTrainer(cfg, ("annie", "master_yi"), init=None, resume=False)
+    cfg.iterations = 3
+    trainer = duel.DuelTrainer(cfg, ("annie", "master_yi"), init=None, resume=True)
+    assert trainer.iteration == 2
+    specs = trainer._specs()                    # with snapshots, some games are against the pool
+    assert {s.a_source for s in specs} - {"live"} and {s.b_source for s in specs} - {"live"}
+    trainer.train(eval_games=4)
+    assert len((tmp_path / "d" / "log.jsonl").read_text().splitlines()) == 3

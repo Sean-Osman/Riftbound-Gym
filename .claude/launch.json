@@ -22,6 +22,18 @@
         "8766"
       ],
       "port": 8766
+    },
+    {
+      "name": "riftbound-sim-annie-vs-mf",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "sim.py",
+        "--decks",
+        "annie,miss_fortune",
+        "--port",
+        "8767"
+      ],
+      "port": 8767
     }
   ]
 }
